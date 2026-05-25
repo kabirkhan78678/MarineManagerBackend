@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Boat Service Quote Approval</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        font-family: Arial, sans-serif;
+        background: #f4f7fb;
+        color: #1f2937;
+      }
+      .wrapper {
+        max-width: 640px;
+        margin: 0 auto;
+        background: #ffffff;
+        border-radius: 16px;
+        padding: 32px;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      }
+      h1 {
+        margin: 0 0 12px;
+        color: #0f4c81;
+      }
+      p {
+        line-height: 1.6;
+      }
+      .price {
+        font-size: 24px;
+        font-weight: 700;
+        margin: 20px 0;
+        color: #111827;
+      }
+      .services {
+        margin: 20px 0;
+        padding: 0;
+        list-style: none;
+      }
+      .services li {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 0;
+        border-bottom: 1px solid #e5e7eb;
+      }
+      .actions {
+        margin-top: 28px;
+      }
+      .btn {
+        display: inline-block;
+        margin-right: 12px;
+        margin-bottom: 12px;
+        padding: 12px 20px;
+        border-radius: 10px;
+        color: #ffffff !important;
+        text-decoration: none;
+        font-weight: 600;
+      }
+      .approve {
+        background: #16a34a;
+      }
+      .reject {
+        background: #dc2626;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrapper">
+      <h1>Quote Approval Needed</h1>
+      <p>Hello <%= ownerName %>,</p>
+      <p>Please review the generated service quote for your boat.</p>
+
+      <div class="price">Total Quote: $<%= totalPrice %></div>
+
+      <ul class="services">
+        <% services.forEach((service) => { %>
+          <li>
+            <span><%= service.serviceName %></span>
+            <strong>$<%= service.servicePrice %></strong>
+          </li>
+        <% }) %>
+      </ul>
+
+      <div class="actions">
+        <a class="btn approve" href="<%= approveLink %>">Approve Quote</a>
+        <a class="btn reject" href="<%= rejectLink %>">Reject Quote</a>
+      </div>
+    </div>
+  </body>
+</html>

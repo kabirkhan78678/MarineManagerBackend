@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "marinemanager-943fb",
+  "private_key_id": "ec1be2d232b48a2c2031e18cb7a423a3153c3f9b",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCucugqo5aOmoTb\nKhvOWhhoADXSt+DooRGz8p5wdYwjY4CE54d5NI9K88VhFfZaQDbFggMw0wOOSDPc\nw7y/TDhqbzxKX3XNkymJ+UrybHl67L1sBIxsfR6m7CYatXpVzAIFl+7TzCKYEtMV\nW6Vp9/cP/auwDdkm5Zr1N/hYPxkVULtkrnLJhExpidv9n+qN3gQUwPsHjlskZMpc\nsjNFmhBlyEnkN1Ndh8Mr4+8BEv0/a3+IRqsw3GjqH6TyY9gGBgWit8Kbeoxi+ac9\nx5HsGh47hYAzWwfsv02Q9YzaJJiNXgv/HvrIpz/fUIp021Ak/vD2YQtuGSzs9ek9\nNBCH/KihAgMBAAECggEAArrV1vqjxnQUzY9Xa3eFtP/sLQcCAsXoI+LxV4TBYQQ4\n4euJF0yVzEhBBROdx6cEVxDMJGa9l3ZaCGj64m/1XItZ0UyfMxdhJvwdj/+s+CSt\nqKZwEkUJdnbQzaocFwJdSubddAHtuH09QXLuEAN94bRNoYXv9AUTs2Vmh5lSLEm7\njAd6G4WHTOYyIaUYy3q5BNKtvfpkrRdfV6yO6lOyXslwKCpXBPVL9TLonj6l+5lu\nlaqFRONuEL6eFGf4CL1xTz92bH8rOr//H9BzLpmdl7lyaNN2EeYWCRZRBgHutqxL\ntAf7mYN6APBoFvC4261ZdHbrdM3eRGnCqno1wSl/4QKBgQDdP261Ay7bzj0cBvUM\n086zRwloGk+nHjFwRcDwVGSHY4rt82hmP5W24d3mUi4YNWxJzYWzwkKmT8oQvAA5\ne+IvPd3seEXYgr2Bx9nVzgFJHM9XxIu9yZ4O3Uw1zzv59Dwz0rMtVAdA76pXK3x3\nmtcxuYOjw6i4R95cNs0UjqOkEQKBgQDJ2aYC8RmVvEhHud5bEjQ4BwIvVu1O24Nc\n0unVasTX0j7Jp+XlxbJ/fefqq0/ikxfTInpBf+EHbKN8GNaQuhgtDJfEnI//iu6O\nFGE/1Xcccss3v3B9VbEbdifZ3mnr8ecJbISGOE+yHVJXGrI3+SeuzxplOmGLJ74X\nxwoDoUALkQKBgQCTAEp2Sp8fvHAt5xF6bGCyDUjaumCiERWYG0CObgQ9UI5Ge6uq\nBCVdVcUx+vhVbWl9v+hN/4x5JBqF8+PSTdWCvgBt1ZvSt0tip3686BtCkLnS/uw6\nNXOnPLIeLosTEIvPgvc57tLC+nqbYHFapq7EgxZMAPxhNJ8xddfdCMkBgQKBgCCd\n2OOUzguSFyPv9uxEbse26jV4GHSrp/hx5HMmA5TUVm0DgnS0k3ligP08nXYBStJF\nOfgnj9dBSNGeud09FPcCl+ufWO10J8Qxqt1DwzGHoyro9mZqWGoVl67u77K+rhSp\nwmhl5QrlDg8hMzc0PaNTt/Ivkt+HloIFGasofU7hAoGASirSpL0XhPIqtW2oPFCF\ncvClooZ1O/UjtjDHK75enGDCqtfL9iNB8E/0DZOFbKaT59PKDfSbPPY6p8IzoTob\n9QRKrP8JkClnFBKcAR/gHHLV9TyjAV/rgTri8QTSSkK8OKUj1KhkL6BeBaJw8Zib\nqpxDfBQTj3SVuj0OfxGEf8U=\n-----END PRIVATE KEY-----\n",
+  "client_email": "firebase-adminsdk-467xo@marinemanager-943fb.iam.gserviceaccount.com",
+  "client_id": "112020530870245854286",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-467xo%40marinemanager-943fb.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

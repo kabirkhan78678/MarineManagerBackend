@@ -1,0 +1,169 @@
+<!DOCTYPE HTML
+    PUBLIC "-//W3C//DTD XHTML 1.0 Transitional //EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml"
+    xmlns:o="urn:schemas-microsoft-com:office:office">
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="x-apple-disable-message-reformatting">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&display=swap"
+        rel="stylesheet">
+
+    <title>Verify Your Account</title>
+    <style type="text/css">
+        a,
+        a[href],
+        a:hover,
+        a:link,
+        a:visited {
+            /* This is the link colour */
+            text-decoration: none !important;
+            color: #0000EE;
+        }
+
+        .link {
+            text-decoration: underline !important;
+        }
+
+        p,
+        p:visited {
+            font-size: 15px;
+            line-height: 24px;
+            font-family: 'Helvetica', Arial, sans-serif;
+            font-weight: 300;
+            text-decoration: none;
+            color: #000000;
+        }
+
+        h1 {
+            /* Fallback heading style */
+            font-size: 22px;
+            line-height: 24px;
+            font-family: 'Helvetica', Arial, sans-serif;
+            font-weight: normal;
+            text-decoration: none;
+            color: #000000;
+        }
+
+        .ExternalClass p,
+        .ExternalClass span,
+        .ExternalClass font,
+        .ExternalClass td {
+            line-height: 100%;
+        }
+
+        .ExternalClass {
+            width: 100%;
+        }
+
+        * {
+            font-family: "Roboto", sans-serif;
+
+        }
+    </style>
+</head>
+
+<body
+    style="text-align: center; margin: 0; padding-top: 30px; padding-bottom: 10px; padding-left: 0; padding-right: 0; -webkit-text-size-adjust: 100%;background-color: #f2f4f6; color: #000000"
+    align="center">
+    <div style="text-align: center;">
+        <!-- Start container for logo -->
+        <table align="center"
+            style="text-align: center; vertical-align: top;  max-width: 600px; background-color: #ffffff;">
+            <tbody>
+                <tr>
+                    <td
+                        style="width: 596px; background-color: #003760; vertical-align: top; padding-left: 0; padding-right: 0;padding-bottom: 40px;">
+                        <!-- Your logo is here -->
+                        <img style="width: 220px; max-width: 220px; object-fit: contain; text-align: center; color: #ffffff;"
+                            alt="Logo" src="https://api.fmservicehub.com/marine_new_logo.png" align="center">
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+        <table align="center"
+            style="text-align: center; vertical-align: top; max-width: 600px; width: 100%; background-color: #ffffff; padding-top: 30px;">
+            <tbody>
+
+                 <tr>
+                    <td style="padding:0px 20px 20px; text-align:start; "> <span style="font-weight: 500;">Payment To -
+                        </span> {{paymentTo}}</td>
+                </tr>
+
+                <tr>
+                    <td style="padding:0px 20px 20px; text-align:start; "> <span style="font-weight: 500;">Invoice No -
+                        </span> {{invoiceNumber}}</td>
+                </tr>
+                <tr>
+                    <td style="padding:0px 20px 20px; text-align:start; "> <span style="font-weight: 500;">Payment Due by -
+                        </span>{{pleasePayByDate}}</td>
+                </tr>
+                <tr>
+                    <td
+                        style="vertical-align: top; padding-left: 20px; padding-right: 20px; padding-top: 0px; padding-bottom: 40px;">
+                        <h1
+                            style="font-size: 16px; line-height: 24px;   text-align: start; text-decoration: none; color: #000000; font-weight: 600;">
+                            Dear {{boatOwnerName}},</h1>
+                        <p style="text-align:start"> I hope this email finds you well. Please find attached the invoice
+                            for the recent services completed for your boat, {{boatName}}. </p>
+
+                        <h4 style="text-align:start; font-size: 16px; line-height: 24px;   text-align: start; text-decoration: none; color: #000000; font-weight: 600;">Invoice Summary:</h4>
+                        <div>
+                            <p style="text-align:start; margin-bottom: 0px;font-size:13px"> <span style="font-weight: 500;">Payment To
+                                    Number: </span> {{paymentTo}}</p>
+                            <p style="text-align:start; margin-bottom: 0px; margin-top: 5px;font-size:13px"> <span style="font-weight: 500;">Invoice
+                                    Number: </span> {{invoiceNumber}}</p>
+                            <p style="text-align:start;margin-top: 5px;margin-bottom: 0px;font-size:13px"> <span
+                                    style="font-weight: 500;">Boat Name:</span> {{boatName}}</p>
+                            <p style="text-align:start;margin-top: 5px;margin-bottom: 0px;font-size:13px"> <span
+                                    style="font-weight: 500;">Total Amount (After Tax): </span>${{totalAmountAfterTax}}
+                            </p>
+                            <p style="text-align:start;margin-top: 5px;margin-bottom: 0px;font-size:13px"> <span
+                                    style="font-weight: 500;">Payment Due By: </span> {{pleasePayByDate}}</p>
+
+                        </div>
+                        <h4 style="text-align:start; font-size: 16px; line-height: 24px;   text-align: start; text-decoration: none; color: #000000; font-weight: 600;">💳 Payment Instructions:</h4>
+                        <p style="text-align:start">Please make the payment using the details mentioned in the attached
+                            invoice. Ensure you include the invoice number as a reference when making the payment.</p>
+
+                        <h4 style="text-align:start;font-weight:500">
+                            A detailed invoice is attached to this email.
+
+
+                        </h4>
+                        <p style="text-align:start;">
+                            If you have already made the payment, kindly ignore this email.  If you have any questions, feel free to reach out to our team at <a href="#" target="_blank" style="color:#01365d;font-weight: 500;">ahoy@firstmate.com.au</a>
+
+                        </p>
+                        <div style="text-align:left; margin-top:50px">
+                            <p style="margin-bottom:0px; font-weight:500">Best regards,</p>
+                            <h4
+                                style="font-size: 20px; line-height: 24px; margin-top: 10px; margin-bottom: 0px;  font-weight: 600;">
+                                ServieHub Team</h4>
+                        </div>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+        <table align="center"
+            style="text-align: center; vertical-align: top;max-width: 600px; width: 100%; background:#01365d">
+            <tbody>
+                <tr>
+                    <td
+                        style=" vertical-align: top; padding-left: 30px; padding-right: 30px; padding-top: 30px; padding-bottom: 30px;">
+                        <p style="margin-bottom:10px; margin-top: 0px; text-align:center; color:#fff;">Need More Help?
+                        </p>
+                        <a href="mailto:ahoy@firstmate.com.au"
+                            style="color:#fff; text-decoration: underline; text-align:center; display: block; ">We are
+                            here to help you out</a>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</body>
+
+</html>
