@@ -893,218 +893,150 @@ export async function verifyPassword(req, res) {
   }
 };
 
-// export async function changePassword(req, res) {
-//   try {
-//     const { password, confirm_password } = req.body;
-//     const token = JSON.parse(localStorage.getItem('vertoken'));
-//     const schema = Joi.alternatives(
-//       Joi.object({
-//         password: Joi.string().min(8).required().messages({
-//           "any.required": "{{#label}} is required!!",
-//           "string.empty": "can't be empty!!",
-//           "string.min": "minimum 8 value required",
-//           "string.max": "maximum 10 values allowed",
-//         }),
-//         confirm_password: Joi.string().min(8).required().messages({
-//           "any.required": "{{#label}} is required!!",
-//           "string.empty": "can't be empty!!",
-//           "string.min": "minimum 8 value required",
-//           "string.max": "maximum 10 values allowed",
-//         }),
-//       })
-//     )
-//     const result = schema.validate({ password, confirm_password });
-//     if (result.error) {
-//       const message = result.error.details.map((i) => i.message).join(",");
-//       res.render(path.join(__dirname, '../view/', 'forgetPasswordSupplier.ejs'), {
-//         message: result.error.details[0].message,
-//         error: message,
-//         missingParams: result.error.details[0].message,
-//         msg: message
-//       });
+export async function changePassword(req, res) {
+  try {
+    const { password, confirm_password } = req.body;
+    const token = JSON.parse(localStorage.getItem('vertoken'));
+    const schema = Joi.alternatives(
+      Joi.object({
+        password: Joi.string().min(8).required().messages({
+          "any.required": "{{#label}} is required!!",
+          "string.empty": "can't be empty!!",
+          "string.min": "minimum 8 value required",
+          "string.max": "maximum 10 values allowed",
+        }),
+        confirm_password: Joi.string().min(8).required().messages({
+          "any.required": "{{#label}} is required!!",
+          "string.empty": "can't be empty!!",
+          "string.min": "minimum 8 value required",
+          "string.max": "maximum 10 values allowed",
+        }),
+      })
+    )
+    const result = schema.validate({ password, confirm_password });
+    if (result.error) {
+      const message = result.error.details.map((i) => i.message).join(",");
+      res.render(path.join(__dirname, '../view/', 'forgetPasswordSupplier.ejs'), {
+        message: result.error.details[0].message,
+        error: message,
+        missingParams: result.error.details[0].message,
+        msg: message
+      });
 
-//     }
-//     else {
-//       if (password == confirm_password) {
-//         const suppliers = await prisma.supplier.findFirst({
-//           where: {
-//             token: token
-//           }
-//         });
-//         if (suppliers) {
-//           const hashedPassword = await argon2.hash(password);
-//           await prisma.supplier.update({
-//             where: {
-//               id: suppliers.id
-//             },
-//             data: {
-//               password: hashedPassword
-//             }
-//           })
-//           // console.log("result2",result2)
-//           res.sendFile(path.join(__dirname, '../view/message.html'), { msg: "" });
-//           // else {
-//           //   res.render(path.join(__dirname ,'../view/', 'forgetPassword.ejs'), { msg: "Internal Error Occured, Please contact Support." });
-//           // }
-//         }
-//         else {
-//           return res.json({
-//             message: "User not found please register your account",
-//             success: false,
-//             status: 400,
-//           })
-//         }
-//       }
-//       else {
-//         res.render(path.join(__dirname, '../view/', 'forgetPassword.ejs'),
-//           { msg: "Password and Confirm Password do not match" });
-//       }
-//     }
-//   }
-//   catch (error) {
-//     console.log(error);
+    }
+    else {
+      if (password == confirm_password) {
+        const suppliers = await prisma.supplier.findFirst({
+          where: {
+            token: token
+          }
+        });
+        if (suppliers) {
+          const hashedPassword = await argon2.hash(password);
+          await prisma.supplier.update({
+            where: {
+              id: suppliers.id
+            },
+            data: {
+              password: hashedPassword
+            }
+          })
+          // console.log("result2",result2)
+          res.sendFile(path.join(__dirname, '../view/message.html'), { msg: "" });
+          // else {
+          //   res.render(path.join(__dirname ,'../view/', 'forgetPassword.ejs'), { msg: "Internal Error Occured, Please contact Support." });
+          // }
+        }
+        else {
+          return res.json({
+            message: "User not found please register your account",
+            success: false,
+            status: 400,
+          })
+        }
+      }
+      else {
+        res.render(path.join(__dirname, '../view/', 'forgetPassword.ejs'),
+          { msg: "Password and Confirm Password do not match" });
+      }
+    }
+  }
+  catch (error) {
+    console.log(error);
 
-//     res.render(path.join(__dirname, '/view/', 'forgetPassword.ejs'),
-//       { msg: "Internal server error" })
-//   }
-// };
+    res.render(path.join(__dirname, '/view/', 'forgetPassword.ejs'),
+      { msg: "Internal server error" })
+  }
+};
 
 export async function changePasswordApi(req, res) {
-
-  try {
-
-    const { current_password, password, confirm_password } = req.body;
-
- 
-
-    const schema = Joi.object({
-
-      current_password: Joi.string().min(8).required().messages({
-
-        "any.required": "Current password is required",
-
-        "string.empty": "Current password cannot be empty",
-
-        "string.min": "Current password must be at least 8 characters",
-
-      }),
-
-      password: Joi.string().min(8).required().messages({
-
-        "any.required": "New password is required",
-
-        "string.empty": "New password cannot be empty",
-
-        "string.min": "New password must be at least 8 characters",
-
-      }),
-
-      confirm_password: Joi.string().min(8).required().messages({
-
-        "any.required": "Confirm password is required",
-
-        "string.empty": "Confirm password cannot be empty",
-
-        "string.min": "Confirm password must be at least 8 characters",
-
-      }),
-
-    });
-
- 
-
-    const { error } = schema.validate({ current_password, password, confirm_password });
-
- 
-
-    if (error) {
-
-      return createErrorResponse(res, 400, error.details[0].message);
-
-    }
-
- 
-
-    if (password !== confirm_password) {
-
-      return createErrorResponse(res, 400, "Password and confirm password do not match");
-
-    }
-
- 
-
-    const supplier = await prisma.supplier.findUnique({
-
-      where: {
-
-        id: req.user.id
-
-      }
-
-    });
-
- 
-
-    if (!supplier) {
-
-      return createErrorResponse(res, 404, MessageEnum.SUPPLIER_NOT_FOUND);
-
-    }
-
- 
-
-    if (!supplier.password) {
-
-      return createErrorResponse(res, 400, "No password is set for this account. Please use forgot password.");
-
-    }
-
- 
-
-    const isCurrentPasswordValid = await argon2.verify(supplier.password, current_password);
-
- 
-
-    if (!isCurrentPasswordValid) {
-
-      return createErrorResponse(res, 401, "Current password is incorrect");
-
-    }
-
- 
-
-    const hashedPassword = await argon2.hash(password);
-
- 
-
-    await prisma.supplier.update({
-
-      where: {
-
-        id: supplier.id
-
-      },
-
-      data: {
-
-        password: hashedPassword
-
-      }
-
-    });
-
- 
-
-    return createSuccessResponse(res, 200, true, "Supplier password changed successfully");
-
-  } catch (error) {
-
-    console.log("changePasswordApi error => ", error);
-
-    return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
-
-  }
-
+  try {
+    const { current_password, password, confirm_password } = req.body;
+
+    const schema = Joi.object({
+      current_password: Joi.string().min(8).required().messages({
+        "any.required": "Current password is required",
+        "string.empty": "Current password cannot be empty",
+        "string.min": "Current password must be at least 8 characters",
+      }),
+      password: Joi.string().min(8).required().messages({
+        "any.required": "New password is required",
+        "string.empty": "New password cannot be empty",
+        "string.min": "New password must be at least 8 characters",
+      }),
+      confirm_password: Joi.string().min(8).required().messages({
+        "any.required": "Confirm password is required",
+        "string.empty": "Confirm password cannot be empty",
+        "string.min": "Confirm password must be at least 8 characters",
+      }),
+    });
+
+    const { error } = schema.validate({ current_password, password, confirm_password });
+
+    if (error) {
+      return createErrorResponse(res, 400, error.details[0].message);
+    }
+
+    if (password !== confirm_password) {
+      return createErrorResponse(res, 400, "Password and confirm password do not match");
+    }
+
+    const supplier = await prisma.supplier.findUnique({
+      where: {
+        id: req.user.id
+      }
+    });
+
+    if (!supplier) {
+      return createErrorResponse(res, 404, MessageEnum.SUPPLIER_NOT_FOUND);
+    }
+
+    if (!supplier.password) {
+      return createErrorResponse(res, 400, "No password is set for this account. Please use forgot password.");
+    }
+
+    const isCurrentPasswordValid = await argon2.verify(supplier.password, current_password);
+
+    if (!isCurrentPasswordValid) {
+      return createErrorResponse(res, 401, "Current password is incorrect");
+    }
+
+    const hashedPassword = await argon2.hash(password);
+
+    await prisma.supplier.update({
+      where: {
+        id: supplier.id
+      },
+      data: {
+        password: hashedPassword
+      }
+    });
+
+    return createSuccessResponse(res, 200, true, "Supplier password changed successfully");
+  } catch (error) {
+    console.log("changePasswordApi error => ", error);
+    return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
+  }
 }
 
 export async function getMyProfile(req, res) {

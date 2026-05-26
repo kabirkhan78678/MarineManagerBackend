@@ -1,5 +1,5 @@
 import express from "express";
-import { activeStaffMembers, addStaffMember, completeTask, createJobServiceSheet, deleteStaffMemberById, editStaffMember, forgotPassword, getAllMytasks, getAllStaffMembers, getCompletedTasks, getMyProfile, getTodayTasks, getTomorrowTask, getStaffMemberById, login, toggleStaffStatus, updateTaskTimer, verifyPassword,getTaskById, changePasswordApi } from "../controllers/staffController.js";
+import { activeStaffMembers, addStaffMember, changePassword, changePasswordApi, completeTask, createJobServiceSheet, deleteStaffMemberById, editStaffMember, forgotPassword, getAllMytasks, getAllStaffMembers, getCompletedTasks, getMyProfile, getTodayTasks, getTomorrowTask, getStaffMemberById, login, toggleStaffStatus, updateTaskTimer, verifyPassword,getTaskById } from "../controllers/staffController.js";
 import { auth } from "../middlewares/auth.js";
 import { staffAuth } from "../middlewares/staffAuth.js";
 import { upload } from "../middlewares/upload.js";
@@ -24,7 +24,8 @@ staffRouter.post('/forgetPassword', forgotPassword);
 
 staffRouter.get('/verifyPassword/:token', verifyPassword);
 
-// staffRouter.post("/changePassword", changePassword);
+staffRouter.post("/changePassword", changePassword);
+
 staffRouter.post("/change-password-api", staffAuth, changePasswordApi);
 
 staffRouter.get('/getTodayTask', staffAuth, getTodayTasks);

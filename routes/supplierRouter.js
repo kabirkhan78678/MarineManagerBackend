@@ -1,6 +1,6 @@
 import express from "express";
 import { auth } from "../middlewares/auth.js";
-import { addSupplier, editSupplier , getAllSuppliers, login, forgotPassword, getTodayTasks, getTomorrowTask, getCompletedTasks,createJobServiceSheet, completeTask, verifyPassword, getMyProfile, completeProfile, editProfile, getAllMytasks, deleteFile, respondToTaskOffer, changePasswordApi } from "../controllers/supplierController.js";
+import { addSupplier, editSupplier , getAllSuppliers, login, forgotPassword, getTodayTasks, getTomorrowTask, getCompletedTasks,createJobServiceSheet, completeTask, verifyPassword,changePassword, changePasswordApi, getMyProfile, completeProfile, editProfile, getAllMytasks, deleteFile, respondToTaskOffer } from "../controllers/supplierController.js";
 import { supplierauth } from "../middlewares/supplierAuth.js";
 import { upload } from "../middlewares/upload.js";
 import { profileupload } from "../middlewares/profile.js";
@@ -28,7 +28,8 @@ supplierRouter.post('/completeTask', supplierauth, upload.array('images', 10), c
 
 supplierRouter.get('/verifyPassword/:token', verifyPassword);
 
-// supplierRouter.post("/changePassword", changePassword);
+supplierRouter.post("/changePassword", changePassword);
+
 supplierRouter.post("/change-password-api", supplierauth, changePasswordApi);
 
 supplierRouter.get('/myProfile', supplierauth, getMyProfile);
