@@ -2404,6 +2404,7 @@ export async function getAllMytasks(req, res) {
       include: {
         boat: true,
         staff: true,
+        TaskServices: true,
       },
       orderBy: [
         { date_scheduled_from: 'desc' },
@@ -2411,7 +2412,12 @@ export async function getAllMytasks(req, res) {
       ],
     });
 
-    return createSuccessResponse(res, 200, true, MessageEnum.TASK_DATA, tasks);
+    const tasksWithServiceCount = tasks.map((task) => ({
+      ...task,
+      total_no_of_services: task.TaskServices?.length || 0,
+    }));
+
+    return createSuccessResponse(res, 200, true, MessageEnum.TASK_DATA, tasksWithServiceCount);
 
   } catch (error) {
     console.log(error);
@@ -2581,6 +2587,19 @@ export const updateTaskTimer = async (req, res) => {
 
     let updateData = {};
     const now = new Date();
+    const parsePausedDurations = (value) => {
+      if (!value) return [];
+
+      if (Array.isArray(value)) return value;
+
+      try {
+        const parsedValue = JSON.parse(value);
+        return Array.isArray(parsedValue) ? parsedValue : [];
+      } catch (parseError) {
+        console.log("paused_durations parse error => ", parseError);
+        return [];
+      }
+    };
 
     switch (type) {
       case "START":
@@ -2590,7 +2609,7 @@ export const updateTaskTimer = async (req, res) => {
         updateData = {
           job_start_time: now,
           timer_status: "STARTED",
-          paused_durations: [] // Initialize pause array
+          paused_durations: JSON.stringify([])
         };
         break;
 
@@ -2598,10 +2617,10 @@ export const updateTaskTimer = async (req, res) => {
         if (task.timer_status !== "STARTED") {
           return createErrorResponse(res, 400, MessageEnum.JOB_PAUSED);
         }
-        const pauseList = task.paused_durations || [];
+        const pauseList = parsePausedDurations(task.paused_durations);
         pauseList.push({ start: now, end: null });
         updateData = {
-          paused_durations: pauseList,
+          paused_durations: JSON.stringify(pauseList),
           timer_status: "PAUSED"
         };
         break;
@@ -2610,13 +2629,13 @@ export const updateTaskTimer = async (req, res) => {
         if (task.timer_status !== "PAUSED") {
           return createErrorResponse(res, 400, MessageEnum.JOB_RESUME);
         }
-        const resumes = task.paused_durations || [];
+        const resumes = parsePausedDurations(task.paused_durations);
         const last = resumes[resumes.length - 1];
         if (last && !last.end) {
           last.end = now;
         }
         updateData = {
-          paused_durations: resumes,
+          paused_durations: JSON.stringify(resumes),
           timer_status: "STARTED"
         };
         break;
@@ -2627,7 +2646,7 @@ export const updateTaskTimer = async (req, res) => {
           const newUpdatedData = {
             job_start_time: now,
             timer_status: "STARTED",
-            paused_durations: [] // Initialize pause array
+            paused_durations: JSON.stringify([])
           };
 
           await prisma.task.update({
@@ -2655,8 +2674,9 @@ export const updateTaskTimer = async (req, res) => {
 
 
         let pausedMs = 0;
-        if (newtask.paused_durations) {
-          for (const p of newtask.paused_durations) {
+        const pausedDurations = parsePausedDurations(newtask.paused_durations);
+        if (pausedDurations.length) {
+          for (const p of pausedDurations) {
             if (p.start && p.end) {
               pausedMs += new Date(p.end) - new Date(p.start);
             }
