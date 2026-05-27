@@ -1,6 +1,6 @@
 import express from "express";
 import { auth } from "../middlewares/auth.js";
-import { addSupplier, editSupplier , getAllSuppliers, login, forgotPassword, getTodayTasks, getTomorrowTask, getCompletedTasks,createJobServiceSheet, completeTask, verifyPassword,changePassword, changePasswordApi, getMyProfile, completeProfile, editProfile, getAllMytasks, deleteFile, respondToTaskOffer } from "../controllers/supplierController.js";
+import { addSupplier, editSupplier , getAllSuppliers, getSupplierById, getTaskById, getJobDetailById, getCommencedTaskDetailById, login, forgotPassword, getTodayTasks, getTomorrowTask, getCompletedTasks,createJobServiceSheet, completeTask, verifyPassword,changePassword, changePasswordApi, getMyProfile, completeProfile, editProfile, getAllMytasks, deleteFile, respondToTaskOffer } from "../controllers/supplierController.js";
 import { supplierauth } from "../middlewares/supplierAuth.js";
 import { upload } from "../middlewares/upload.js";
 import { profileupload } from "../middlewares/profile.js";
@@ -11,6 +11,8 @@ supplierRouter.post('/addsupllier', auth, addSupplier);
 supplierRouter.post('/editsupllier', auth, editSupplier); 
 
 supplierRouter.get('/getAllSupplier',auth, getAllSuppliers);
+
+supplierRouter.get('/getSupplierById/:id', auth, getSupplierById);
 
 supplierRouter.post('/login', login);
 
@@ -41,6 +43,12 @@ supplierRouter.post('/editProfile',supplierauth, profileupload.fields([{ name: '
 supplierRouter.delete('/deleteFile/:id',supplierauth, deleteFile);
 
 supplierRouter.get('/getAllTasks', supplierauth, getAllMytasks);
+
+supplierRouter.get('/getTaskById/:taskId', supplierauth, getTaskById);
+
+supplierRouter.get('/getJobDetailById/:taskId', supplierauth, getJobDetailById);
+
+supplierRouter.get('/getCommencedTaskDetailById/:taskId', supplierauth, getCommencedTaskDetailById);
 
 
 supplierRouter.post('/respondToTaskOffer',supplierauth, respondToTaskOffer)

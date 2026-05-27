@@ -35,7 +35,6 @@
     "nodemailer": "^6.9.15",
     "nodemailer-express-handlebars": "^7.0.0",
     "nodemon": "^3.1.14",
-    "prisma": "^5.19.1",
     "qs": "^6.14.0",
     "stripe": "^18.0.0",
     "xero-node": "^11.1.0"
