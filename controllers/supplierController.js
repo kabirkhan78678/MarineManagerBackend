@@ -326,6 +326,87 @@ export async function getAllSuppliers(req, res) {
   }
 }
 
+export async function getSupplierById(req, res) {
+  try {
+    const supplierId = Number(req.params.id);
+
+    if (!supplierId || isNaN(supplierId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid supplier id is required",
+      });
+    }
+
+    const linkedSupplier = await prisma.userSupplier.findFirst({
+      where: {
+        userId: req.user.id,
+        supplierId,
+      },
+      include: {
+        supplier: {
+          include: {
+            SupplierInsuranceFile: true,
+          },
+        },
+      },
+    });
+
+    if (!linkedSupplier?.supplier) {
+      return createErrorResponse(res, 404, MessageEnum.SUPPLIER_NOT_FOUND);
+    }
+
+    const supplier = linkedSupplier.supplier;
+    const tasks = await prisma.task.findMany({
+      where: {
+        userId: req.user.id,
+        supplierId: supplier.id,
+      },
+      select: {
+        status: true,
+      },
+    });
+
+    const totalTasks = tasks.length;
+    const completedTasks = tasks.filter((task) => task.status === 1).length;
+    const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+    const responseData = {
+      id: supplier.id,
+      name: linkedSupplier.name || supplier.company_name || `${supplier.first_name || ''} ${supplier.last_name || ''}`.trim() || supplier.email,
+      first_name: supplier.first_name,
+      last_name: supplier.last_name,
+      email: supplier.email,
+      phone_no: supplier.phone_no,
+      company_name: supplier.company_name,
+      company_description: supplier.company_description,
+      city: supplier.city,
+      abn: supplier.abn,
+      about_us: supplier.about_us,
+      service_region: supplier.service_region,
+      services_offered: supplier.services_offered,
+      accounting_software_used: supplier.accounting_software_used,
+      complete_profile_status: supplier.complete_profile_status,
+      status: supplier.status,
+      company_logo: supplier.company_logo ? `${baseurl}/profile/${supplier.company_logo}` : null,
+      trade_license: supplier.trade_license ? `${baseurl}/profile/${supplier.trade_license}` : null,
+      total_tasks: totalTasks,
+      completed_tasks: completedTasks,
+      completion_rate: completionRate,
+      insurance_files: supplier.SupplierInsuranceFile.map((file) => ({
+        id: file.id,
+        filename: file.filename ? `${baseurl}/profile/${file.filename}` : null,
+      })),
+      createdAt: supplier.createdAt,
+      updatedAt: supplier.updatedAt,
+    };
+
+    return createSuccessResponse(res, 200, true, MessageEnum.SUPPLIER_DATA, responseData);
+  } catch (error) {
+    console.error(error);
+    return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
+  }
+}
+
 
 export async function login(req, res) {
   try {
@@ -1285,6 +1366,11 @@ export async function getAllMytasks(req, res) {
           include: {
             boat: true,
             supplier: true,
+            TaskServices: {
+              select: {
+                id: true,
+              },
+            },
           },
         },
       },
@@ -1317,13 +1403,372 @@ export async function getAllMytasks(req, res) {
     //   ],
     // });
 
-    return createSuccessResponse(res, 200, true, MessageEnum.TASK_DATA, taskSupplierEntries);
+    const formattedTaskSupplierEntries = taskSupplierEntries.map((entry) => {
+      const totalServices = entry.task?.TaskServices?.length || 0;
+
+      return {
+        ...entry,
+        totalServices,
+        total_services: totalServices,
+        task: entry.task
+          ? {
+            ...entry.task,
+            totalServices,
+            total_services: totalServices,
+          }
+          : entry.task,
+      };
+    });
+
+    return createSuccessResponse(res, 200, true, MessageEnum.TASK_DATA, formattedTaskSupplierEntries);
 
   } catch (error) {
     console.log(error);
     return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
   }
 };
+
+export async function getTaskById(req, res) {
+  try {
+    const taskId = Number(req.params.taskId);
+
+    if (!taskId || isNaN(taskId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid task id is required",
+      });
+    }
+
+    const task = await prisma.task.findFirst({
+      where: {
+        id: taskId,
+        OR: [
+          { supplierId: req.user.id },
+          {
+            TaskSupplierOffer: {
+              some: {
+                supplierId: req.user.id,
+                status: { in: ["PENDING", "ACCEPTED"] },
+              },
+            },
+          },
+        ],
+      },
+      include: {
+        boat: true,
+        supplier: true,
+        TaskServices: {
+          select: {
+            id: true,
+            serviceId: true,
+            serviceName: true,
+            servicePrice: true,
+          },
+        },
+        TaskPhoto: true,
+        JobServiceSheet: {
+          include: {
+            Material: true,
+          },
+        },
+        TaskSupplierOffer: {
+          where: {
+            supplierId: req.user.id,
+          },
+          select: {
+            id: true,
+            status: true,
+            responded_at: true,
+            offered_price: true,
+          },
+        },
+      },
+    });
+
+    if (!task) {
+      return createErrorResponse(res, 404, MessageEnum.TASK_NOT_FOUND);
+    }
+
+    const serviceItems = task.TaskServices.map((service) => ({
+      taskServiceId: service.id,
+      serviceId: service.serviceId,
+      serviceName: service.serviceName,
+      servicePrice: Number(service.servicePrice || 0),
+      cost: Number(service.servicePrice || 0),
+    }));
+
+    const responseData = {
+      id: task.id,
+      description: task.description,
+      time_alloted: task.time_alloted,
+      quoted_value: task.quoted_value,
+      status: task.status,
+      assign_to: task.assign_to,
+      date_scheduled_from: task.date_scheduled_from,
+      date_scheduled_to: task.date_scheduled_to,
+      taskInfo: task.taskInfo,
+      supplierNotes: task.supplierNotes,
+      futureWatchList: task.futureWatchList,
+      recommendedDueDate: task.recommendedDueDate,
+      ownerApprovalStatus: task.ownerApprovalStatus,
+      totalServices: task.TaskServices.length,
+      total_services: task.TaskServices.length,
+      noOfServices: task.TaskServices.length,
+      servicesCount: task.TaskServices.length,
+      boat: task.boat,
+      supplier: task.supplier,
+      offer: task.TaskSupplierOffer[0] || null,
+      services: serviceItems.map((service) => service.serviceName),
+      serviceNames: serviceItems.map((service) => service.serviceName),
+      serviceItems,
+      service_items: serviceItems,
+      TaskServices: task.TaskServices.map((service) => ({
+        id: service.id,
+        taskServiceId: service.id,
+        serviceId: service.serviceId,
+        serviceName: service.serviceName,
+        servicePrice: Number(service.servicePrice || 0),
+      })),
+      photos: task.TaskPhoto,
+      jobServiceSheets: task.JobServiceSheet.map((sheet) => ({
+        ...sheet,
+        materials: sheet.Material || [],
+      })),
+      createdAt: task.createdAt,
+      completed_at: task.completed_at,
+    };
+
+    return createSuccessResponse(res, 200, true, MessageEnum.TASK_DATA, responseData);
+  } catch (error) {
+    console.error(error);
+    return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
+  }
+}
+
+export async function getJobDetailById(req, res) {
+  try {
+    const taskId = Number(req.params.taskId);
+
+    if (!taskId || isNaN(taskId)) {
+      return createErrorResponse(res, 400, "Task id is required");
+    }
+
+    const task = await prisma.task.findFirst({
+      where: {
+        id: taskId,
+        OR: [
+          { supplierId: req.user.id },
+          {
+            TaskSupplierOffer: {
+              some: {
+                supplierId: req.user.id,
+                status: { in: ["PENDING", "ACCEPTED"] },
+              },
+            },
+          },
+        ],
+      },
+      include: {
+        boat: true,
+        user: true,
+        supplier: true,
+        TaskServices: true,
+        TaskPhoto: true,
+        JobServiceSheet: {
+          include: {
+            Material: true,
+          },
+          orderBy: {
+            id: "desc",
+          },
+        },
+      },
+    });
+
+    if (!task) {
+      return createErrorResponse(res, 404, MessageEnum.TASK_NOT_FOUND);
+    }
+
+    const primaryJobSheet = task.JobServiceSheet?.[0] || null;
+
+    const services = task.TaskServices.map((service) => ({
+      serviceId: service.id,
+      taskServiceId: service.id,
+      serviceName: service.serviceName || "-",
+      description: service.description || "No description available",
+      cost: Number(service.servicePrice || 0),
+      servicePrice: Number(service.servicePrice || 0),
+    }));
+
+    const materials = (primaryJobSheet?.Material || []).map((material) => ({
+      id: material.id,
+      materialName: material.materialName,
+      unitsUsed: Number(material.unitsUsed || 0),
+      pricePerUnit: Number(material.pricePerUnit || 0),
+      totalPrice: Number(material.totalPrice || 0),
+    }));
+
+    const servicesTotal = services.reduce(
+      (sum, item) => sum + Number(item.cost || 0),
+      0
+    );
+
+    const materialsTotal = materials.reduce(
+      (sum, item) => sum + Number(item.totalPrice || 0),
+      0
+    );
+
+    const responseData = {
+      taskId: task.id,
+      boatId: task.boatId,
+      boatName: task.boat?.name || "-",
+      ownerName: task.boat?.owners_name || task.user?.company_name || "-",
+      mobile: task.supplier?.phone_no || "-",
+      maintenanceDescription: task.description || "-",
+      quotedValue: task.quoted_value || "0",
+      jobId: task.jobNumber || task.id,
+      timeAllocatedHours: task.time_alloted || "0",
+      startDate: task.date_scheduled_from,
+      endDate: task.date_scheduled_to,
+      servicesCount: task.TaskServices.length,
+      totalServices: task.TaskServices.length,
+      services,
+      TaskServices: task.TaskServices,
+      photos: task.TaskPhoto || [],
+      serviceSheet: {
+        exists: !!primaryJobSheet,
+        jobServiceSheetId: primaryJobSheet?.id || null,
+        date: primaryJobSheet?.date || task.date_scheduled_from || null,
+        jobNumber: primaryJobSheet?.jobNumber || task.jobNumber || String(task.id),
+        personAttending:
+          primaryJobSheet?.personAttending ||
+          `${req.user.first_name || ""} ${req.user.last_name || ""}`.trim() ||
+          req.user.company_name ||
+          "-",
+        customerName:
+          primaryJobSheet?.customerName ||
+          task.boat?.owners_name ||
+          task.user?.company_name ||
+          "-",
+        mobile:
+          primaryJobSheet?.mobile ||
+          task.supplier?.phone_no ||
+          "-",
+        workToBeCarriedOut:
+          primaryJobSheet?.workToBeCarriedOut ||
+          task.description ||
+          "",
+        workCarriedOut:
+          primaryJobSheet?.workCarriedOut ||
+          "",
+        furtherActionRequired:
+          primaryJobSheet?.furtherActionRequired ||
+          "",
+        cdsSignature:
+          primaryJobSheet?.cdsSignature ||
+          "",
+        materials,
+      },
+      costSummary: {
+        servicesTotal,
+        materialsTotal,
+        grandTotal: servicesTotal + materialsTotal,
+      },
+      meta: {
+        status: task.status,
+        assign_to: task.assign_to,
+        ownerApprovalStatus: task.ownerApprovalStatus,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+      },
+    };
+
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      "Supplier job detail fetched successfully",
+      responseData
+    );
+  } catch (error) {
+    console.error(error);
+    return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
+  }
+}
+
+export async function getCommencedTaskDetailById(req, res) {
+  try {
+    const taskId = Number(req.params.taskId);
+
+    if (!taskId || isNaN(taskId)) {
+      return createErrorResponse(res, 400, "Task id is required");
+    }
+
+    const task = await prisma.task.findFirst({
+      where: {
+        id: taskId,
+        OR: [
+          { supplierId: req.user.id },
+          {
+            TaskSupplierOffer: {
+              some: {
+                supplierId: req.user.id,
+                status: { in: ["PENDING", "ACCEPTED"] },
+              },
+            },
+          },
+        ],
+      },
+      include: {
+        boat: true,
+        supplier: true,
+        TaskPhoto: true,
+      },
+    });
+
+    if (!task) {
+      return createErrorResponse(res, 404, MessageEnum.TASK_NOT_FOUND);
+    }
+
+    const responseData = {
+      taskId: task.id,
+      boatId: task.boatId,
+      boatName: task.boat?.name || "-",
+      startDate: task.date_scheduled_from,
+      endDate: task.date_scheduled_to,
+      taskDescription: task.description || "-",
+      taskInfo: task.taskInfo || "",
+      supplierNotes: task.supplierNotes || "",
+      futureWatchList: task.futureWatchList || "",
+      recommendedDueDate: task.recommendedDueDate,
+      status: task.status,
+      quotedValue: task.quoted_value || "0",
+      timeAllocatedHours: task.time_alloted || "0",
+      images: (task.TaskPhoto || []).map((photo) => ({
+        id: photo.id,
+        url: photo.url ? `${baseurl}/profile/${photo.url}` : null,
+        createdAt: photo.createdAt,
+      })),
+      meta: {
+        assign_to: task.assign_to,
+        ownerApprovalStatus: task.ownerApprovalStatus,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+      },
+    };
+
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      "Commenced task detail fetched successfully",
+      responseData
+    );
+  } catch (error) {
+    console.error(error);
+    return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
+  }
+}
 
 export async function deleteFile(req, res) {
   try {
