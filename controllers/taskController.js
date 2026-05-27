@@ -121,6 +121,81 @@ async function sendTaskAssignmentEmail({ recipient, role, task, companyName }) {
   });
 }
 
+function normalizeTaskServiceIds(payload = {}) {
+  const rawServices =
+    Array.isArray(payload.services)
+      ? payload.services
+      : Array.isArray(payload.serviceIds)
+        ? payload.serviceIds
+        : Array.isArray(payload.selectedServices)
+          ? payload.selectedServices
+          : [];
+
+  const hasServicePayload =
+    payload.services !== undefined ||
+    payload.serviceIds !== undefined ||
+    payload.selectedServices !== undefined;
+
+  const serviceIds = [...new Set(
+    rawServices
+      .map((service) => {
+        if (service && typeof service === "object") {
+          return Number(service.serviceId ?? service.id);
+        }
+
+        return Number(service);
+      })
+      .filter((id) => Number.isInteger(id) && id > 0)
+  )];
+
+  return {
+    hasServicePayload,
+    serviceIds,
+  };
+}
+
+async function fetchServicePresetRecords(serviceIds) {
+  if (!serviceIds.length) {
+    return [];
+  }
+
+  const selectedServices = await prisma.servicePreset.findMany({
+    where: {
+      id: {
+        in: serviceIds,
+      },
+    },
+    select: {
+      id: true,
+      serviceTitle: true,
+      serviceCost: true,
+    },
+  });
+
+  if (selectedServices.length !== serviceIds.length) {
+    const foundIds = selectedServices.map((service) => service.id);
+    const missingIds = serviceIds.filter((id) => !foundIds.includes(id));
+    const error = new Error(`Some services were not found: [${missingIds.join(", ")}]`);
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const serviceMap = new Map(
+    selectedServices.map((service) => [service.id, service])
+  );
+
+  return serviceIds.map((serviceId) => serviceMap.get(serviceId));
+}
+
+function buildTaskServiceCreateData(taskId, selectedServices = []) {
+  return selectedServices.map((service) => ({
+    taskId,
+    serviceId: service.id,
+    serviceName: service.serviceTitle,
+    servicePrice: Number(service.serviceCost || 0),
+  }));
+}
+
 export const createTask = async (req, res) => {
   const {
     description,
@@ -159,6 +234,40 @@ export const createTask = async (req, res) => {
       then: Joi.array().items(Joi.number()).min(1).required(),
       otherwise: Joi.forbidden(),
     }),
+    services: Joi.array().items(
+      Joi.alternatives().try(
+        Joi.number().integer().positive(),
+        Joi.string().pattern(/^\d+$/),
+        Joi.object({
+          id: Joi.alternatives().try(
+            Joi.number().integer().positive(),
+            Joi.string().pattern(/^\d+$/)
+          ).optional(),
+          serviceId: Joi.alternatives().try(
+            Joi.number().integer().positive(),
+            Joi.string().pattern(/^\d+$/)
+          ).optional(),
+        }).or("id", "serviceId"),
+      )
+    ).optional(),
+    serviceIds: Joi.array().items(
+      Joi.alternatives().try(
+        Joi.number().integer().positive(),
+        Joi.string().pattern(/^\d+$/)
+      )
+    ).optional(),
+    selectedServices: Joi.array().items(
+      Joi.object({
+        id: Joi.alternatives().try(
+          Joi.number().integer().positive(),
+          Joi.string().pattern(/^\d+$/)
+        ).optional(),
+        serviceId: Joi.alternatives().try(
+          Joi.number().integer().positive(),
+          Joi.string().pattern(/^\d+$/)
+        ).optional(),
+      }).or("id", "serviceId")
+    ).optional(),
     date_scheduled_from: Joi.date().required(),
     date_scheduled_to: Joi.date().required(),
     scheduled_start_time: Joi.when('assigned_to', {
@@ -180,6 +289,9 @@ export const createTask = async (req, res) => {
   }
 
   try {
+    const { serviceIds } = normalizeTaskServiceIds(req.body);
+    const selectedServices = await fetchServicePresetRecords(serviceIds);
+
     if (assigned_to === "STAFF") {
       const staffMember = await prisma.staff_Member.findFirst({
         where: {
@@ -212,22 +324,39 @@ export const createTask = async (req, res) => {
         isUnique = true;
       }
     }
-    const newTask = await prisma.task.create({
-      data: {
-        description,
-        time_alloted,
-        quoted_value,
-        boatId: parseInt(boatId),
-        assign_to: assigned_to,
-        assignStaffId: assigned_to === 'STAFF' ? parseInt(assignStaffId) : null,
-        //supplierId: assigned_to === 'OUTSOURCED' ? parseInt(supplierId) : null,
-        isRecurring: parseInt(isRecurring),
-        userId: req.user.id,
-        date_scheduled_from: new Date(date_scheduled_from),
-        date_scheduled_to: new Date(date_scheduled_to),
-        scheduled_start_time: assigned_to === 'STAFF' ? new Date(scheduled_start_time) : null,
-        jobNumber: jobNumber
-      },
+    const newTask = await prisma.$transaction(async (tx) => {
+      const createdTask = await tx.task.create({
+        data: {
+          description,
+          time_alloted,
+          quoted_value,
+          boatId: parseInt(boatId),
+          assign_to: assigned_to,
+          assignStaffId: assigned_to === 'STAFF' ? parseInt(assignStaffId) : null,
+          //supplierId: assigned_to === 'OUTSOURCED' ? parseInt(supplierId) : null,
+          isRecurring: parseInt(isRecurring),
+          userId: req.user.id,
+          date_scheduled_from: new Date(date_scheduled_from),
+          date_scheduled_to: new Date(date_scheduled_to),
+          scheduled_start_time: assigned_to === 'STAFF' ? new Date(scheduled_start_time) : null,
+          jobNumber: jobNumber
+        },
+      });
+
+      if (selectedServices.length) {
+        await tx.taskService.createMany({
+          data: buildTaskServiceCreateData(createdTask.id, selectedServices),
+        });
+      }
+
+      return tx.task.findUnique({
+        where: {
+          id: createdTask.id,
+        },
+        include: {
+          TaskServices: true,
+        },
+      });
     });
     const user = await prisma.user.findUnique({
       where: { id: newTask.userId },
@@ -350,6 +479,10 @@ export const createTask = async (req, res) => {
     return createSuccessResponse(res, 200, true, MessageEnum.TASK_CREATED, newTask);
   } catch (error) {
     console.error(error);
+
+    if (error?.statusCode) {
+      return createErrorResponse(res, error.statusCode, error.message);
+    }
 
     return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
   }
@@ -598,7 +731,41 @@ export const updateTask = async (req, res) => {
     isRecurring: Joi.number().integer().valid(0, 1).optional(),
     id: Joi.number().integer().required(),
     completed_at: Joi.date().optional().allow(''),
-    status: Joi.number().integer().optional()
+    status: Joi.number().integer().optional(),
+    services: Joi.array().items(
+      Joi.alternatives().try(
+        Joi.number().integer().positive(),
+        Joi.string().pattern(/^\d+$/),
+        Joi.object({
+          id: Joi.alternatives().try(
+            Joi.number().integer().positive(),
+            Joi.string().pattern(/^\d+$/)
+          ).optional(),
+          serviceId: Joi.alternatives().try(
+            Joi.number().integer().positive(),
+            Joi.string().pattern(/^\d+$/)
+          ).optional(),
+        }).or("id", "serviceId"),
+      )
+    ).optional(),
+    serviceIds: Joi.array().items(
+      Joi.alternatives().try(
+        Joi.number().integer().positive(),
+        Joi.string().pattern(/^\d+$/)
+      )
+    ).optional(),
+    selectedServices: Joi.array().items(
+      Joi.object({
+        id: Joi.alternatives().try(
+          Joi.number().integer().positive(),
+          Joi.string().pattern(/^\d+$/)
+        ).optional(),
+        serviceId: Joi.alternatives().try(
+          Joi.number().integer().positive(),
+          Joi.string().pattern(/^\d+$/)
+        ).optional(),
+      }).or("id", "serviceId")
+    ).optional()
   });
 
   const { error } = schema.validate(req.body);
@@ -613,6 +780,12 @@ export const updateTask = async (req, res) => {
   }
 
   try {
+    const {
+      hasServicePayload,
+      serviceIds,
+    } = normalizeTaskServiceIds(req.body);
+    const selectedServices = await fetchServicePresetRecords(serviceIds);
+
     // Fetch existing task
     const task = await prisma.task.findUnique({
       where: {
@@ -629,30 +802,53 @@ export const updateTask = async (req, res) => {
     }
 
     // Update task
-    const updatedTask = await prisma.task.update({
-      where: { id: parseInt(id) },
-      data: {
-        description: description !== null && description !== undefined ? description : task.description,
-        time_alloted: time_alloted !== null && time_alloted !== undefined ? time_alloted : task.time_alloted,
-        quoted_value: quoted_value !== null && quoted_value !== undefined ? quoted_value : task.quoted_value,
-        boatId: boatId !== null && boatId !== undefined ? parseInt(boatId) : task.boatId,
-        date_scheduled_from:
-          date_scheduled_from &&
+    const updatedTask = await prisma.$transaction(async (tx) => {
+      const taskRecord = await tx.task.update({
+        where: { id: parseInt(id) },
+        data: {
+          description: description !== null && description !== undefined ? description : task.description,
+          time_alloted: time_alloted !== null && time_alloted !== undefined ? time_alloted : task.time_alloted,
+          quoted_value: quoted_value !== null && quoted_value !== undefined ? quoted_value : task.quoted_value,
+          boatId: boatId !== null && boatId !== undefined ? parseInt(boatId) : task.boatId,
+          date_scheduled_from:
             date_scheduled_from !== null && date_scheduled_from !== undefined
-            ? new Date(date_scheduled_from)
-            : task.date_scheduled_from,
-        date_scheduled_to:
-          date_scheduled_to &&
+              ? new Date(date_scheduled_from)
+              : task.date_scheduled_from,
+          date_scheduled_to:
             date_scheduled_to !== null && date_scheduled_to !== undefined
-            ? new Date(date_scheduled_to)
-            : task.date_scheduled_to,
-        completed_at:
-          completed_at && completed_at !== null && completed_at !== undefined
-            ? new Date(completed_at)
-            : task.completed_at,
-        isRecurring: isRecurring && isRecurring !== null && isRecurring !== undefined ? parseInt(isRecurring) : task.isRecurring,
-        status: status && status !== null && status !== undefined ? parseInt(status) : task.status,  // Added isRecurring handling
-      },
+              ? new Date(date_scheduled_to)
+              : task.date_scheduled_to,
+          completed_at:
+            completed_at !== null && completed_at !== undefined && completed_at !== ""
+              ? new Date(completed_at)
+              : task.completed_at,
+          isRecurring: isRecurring !== null && isRecurring !== undefined ? parseInt(isRecurring) : task.isRecurring,
+          status: status !== null && status !== undefined ? parseInt(status) : task.status,
+        },
+      });
+
+      if (hasServicePayload) {
+        await tx.taskService.deleteMany({
+          where: {
+            taskId: taskRecord.id,
+          },
+        });
+
+        if (selectedServices.length) {
+          await tx.taskService.createMany({
+            data: buildTaskServiceCreateData(taskRecord.id, selectedServices),
+          });
+        }
+      }
+
+      return tx.task.findUnique({
+        where: {
+          id: taskRecord.id,
+        },
+        include: {
+          TaskServices: true,
+        },
+      });
     });
 
     console.log("updatedTask", updatedTask);
@@ -660,6 +856,11 @@ export const updateTask = async (req, res) => {
     return createSuccessResponse(res, 200, true, MessageEnum.TASK_UPDATED, updatedTask);
   } catch (error) {
     console.error(error);
+
+    if (error?.statusCode) {
+      return createErrorResponse(res, error.statusCode, error.message);
+    }
+
     return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
   }
 };

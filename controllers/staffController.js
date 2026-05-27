@@ -39,6 +39,30 @@ const handlebarOptions = {
 };
 
 transporter.use("compile", hbs(handlebarOptions));
+
+function formatTaskServices(taskServices = []) {
+  return taskServices.map((service) => ({
+    id: service.id,
+    taskServiceId: service.id,
+    serviceId: service.serviceId,
+    serviceName: service.serviceName,
+    servicePrice: Number(service.servicePrice || 0),
+    cost: Number(service.servicePrice || 0),
+  }));
+}
+
+function enrichTaskWithServices(task) {
+  const formattedTaskServices = formatTaskServices(task.TaskServices || []);
+  const totalServices = formattedTaskServices.length;
+
+  return {
+    ...task,
+    TaskServices: formattedTaskServices,
+    services: formattedTaskServices.map((service) => service.serviceName),
+    totalServices,
+  };
+}
+
 export async function addStaffMember(req, res) {
   try {
     console.log("here");
@@ -2404,7 +2428,14 @@ export async function getAllMytasks(req, res) {
       include: {
         boat: true,
         staff: true,
-        TaskServices: true,
+        TaskServices: {
+          select: {
+            id: true,
+            serviceId: true,
+            serviceName: true,
+            servicePrice: true,
+          },
+        },
       },
       orderBy: [
         { date_scheduled_from: 'desc' },
@@ -2412,10 +2443,7 @@ export async function getAllMytasks(req, res) {
       ],
     });
 
-    const tasksWithServiceCount = tasks.map((task) => ({
-      ...task,
-      total_no_of_services: task.TaskServices?.length || 0,
-    }));
+    const tasksWithServiceCount = tasks.map(enrichTaskWithServices);
 
     return createSuccessResponse(res, 200, true, MessageEnum.TASK_DATA, tasksWithServiceCount);
 
@@ -2744,7 +2772,7 @@ export async function getTaskById(req, res) {
         success: false,
       });
     }
-    const task = await prisma.task.findUnique({
+    const task = await prisma.task.findFirst({
       where: {
         assignStaffId: req.user.id,
         id: parseInt(taskId)
@@ -2752,10 +2780,24 @@ export async function getTaskById(req, res) {
       include: {
         boat: true,
         staff: true,
+        TaskServices: {
+          select: {
+            id: true,
+            serviceId: true,
+            serviceName: true,
+            servicePrice: true,
+          },
+        },
       },
     });
 
-    return createSuccessResponse(res, 200, true, MessageEnum.TASK_DATA, task);
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      MessageEnum.TASK_DATA,
+      task ? enrichTaskWithServices(task) : task
+    );
 
   } catch (error) {
     console.log(error);

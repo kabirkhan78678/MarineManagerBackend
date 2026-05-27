@@ -1409,12 +1409,10 @@ export async function getAllMytasks(req, res) {
       return {
         ...entry,
         totalServices,
-        total_services: totalServices,
         task: entry.task
           ? {
             ...entry.task,
             totalServices,
-            total_services: totalServices,
           }
           : entry.task,
       };
@@ -1512,16 +1510,10 @@ export async function getTaskById(req, res) {
       recommendedDueDate: task.recommendedDueDate,
       ownerApprovalStatus: task.ownerApprovalStatus,
       totalServices: task.TaskServices.length,
-      total_services: task.TaskServices.length,
-      noOfServices: task.TaskServices.length,
-      servicesCount: task.TaskServices.length,
       boat: task.boat,
       supplier: task.supplier,
       offer: task.TaskSupplierOffer[0] || null,
       services: serviceItems.map((service) => service.serviceName),
-      serviceNames: serviceItems.map((service) => service.serviceName),
-      serviceItems,
-      service_items: serviceItems,
       TaskServices: task.TaskServices.map((service) => ({
         id: service.id,
         taskServiceId: service.id,
@@ -1630,7 +1622,6 @@ export async function getJobDetailById(req, res) {
       timeAllocatedHours: task.time_alloted || "0",
       startDate: task.date_scheduled_from,
       endDate: task.date_scheduled_to,
-      servicesCount: task.TaskServices.length,
       totalServices: task.TaskServices.length,
       services,
       TaskServices: task.TaskServices,
