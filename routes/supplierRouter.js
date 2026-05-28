@@ -1,6 +1,6 @@
 import express from "express";
 import { auth } from "../middlewares/auth.js";
-import { addSupplier, editSupplier , getAllSuppliers, getSupplierById, getTaskById, getJobDetailById, getCommencedTaskDetailById, login, forgotPassword, getTodayTasks, getTomorrowTask, getCompletedTasks,createJobServiceSheet, completeTask, verifyPassword,changePassword, changePasswordApi, getMyProfile, completeProfile, editProfile, getAllMytasks, deleteFile, respondToTaskOffer } from "../controllers/supplierController.js";
+import { addSupplier, editSupplier , getAllSuppliers, getSupplierById, getTaskById, getJobDetailById, getCommencedTaskDetailById, login, forgotPassword, getTodayTasks, getTomorrowTask, getCompletedTasks,createJobServiceSheet, completeTask, verifyPassword,changePassword, changePasswordApi, getMyProfile, completeProfile, editProfile, getAllMytasks, deleteFile, respondToTaskOffer, getAllParts } from "../controllers/supplierController.js";
 import { supplierauth } from "../middlewares/supplierAuth.js";
 import { upload } from "../middlewares/upload.js";
 import { profileupload } from "../middlewares/profile.js";
@@ -52,3 +52,7 @@ supplierRouter.get('/getCommencedTaskDetailById/:taskId', supplierauth, getComme
 
 
 supplierRouter.post('/respondToTaskOffer',supplierauth, respondToTaskOffer)
+
+supplierRouter.get('/getAllParts', supplierauth, getAllParts);
+
+supplierRouter.get('/parts', supplierauth, getAllParts);

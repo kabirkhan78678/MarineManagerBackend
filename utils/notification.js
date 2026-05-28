@@ -26,7 +26,7 @@ export async function sendNotificationRelateToTask(params) {
   //     console.log("User has not allowed  feature plan end notifications")
   //     return;
   // }
-  if (params.token === null) {
+  if (!params.token) {
     console.log("User does not have fcm token")
     return;
   }
@@ -64,7 +64,10 @@ export async function createNotification(params) {
         content: content,
         taskId:taskId,
         type: type,
-        data: data
+        data:
+          typeof data === "string"
+            ? data
+            : JSON.stringify(data ?? {})
       }
     });
     console.log("Notification created successfully:", notification);

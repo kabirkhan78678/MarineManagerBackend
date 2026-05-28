@@ -2174,9 +2174,8 @@ export const completeTask = async (req, res) => {
 
           performanceStatus,
 
-          taskEfficiency,
-
-          completionDelayMinutes,
+          TaskEfficiency:
+            taskEfficiency,
 
           timer_status:
             "COMPLETED",
@@ -2207,49 +2206,52 @@ export const completeTask = async (req, res) => {
       // CREATE NOTIFICATION
       // =====================================
 
-      await createNotification({
+      if (user) {
 
-        toUserId:
-          user.id,
+        await createNotification({
 
-        byStaffId:
-          req.user.id,
+          toUserId:
+            user.id,
 
-        taskId:
-          task.id,
+          byStaffId:
+            req.user.id,
 
-        data: {
-          performanceStatus,
-          taskEfficiency,
-          completionDelayMinutes
-        },
+          taskId:
+            task.id,
 
-        type:
-          'task',
+          data: {
+            performanceStatus,
+            taskEfficiency,
+            completionDelayMinutes
+          },
 
-        content:
-          `${req.user.full_name} completed a Task`
-      });
+          type:
+            'task',
 
-      // =====================================
-      // PUSH NOTIFICATION
-      // =====================================
+          content:
+            `${req.user.full_name} completed a Task`
+        });
 
-      await sendNotificationRelateToTask({
+        // =====================================
+        // PUSH NOTIFICATION
+        // =====================================
 
-        token:
-          user.fcm_token,
+        await sendNotificationRelateToTask({
 
-        toUserId:
-          user.id,
+          token:
+            user.fcm_token,
 
-        body:
-          `${req.user.full_name} completed a Task`,
+          toUserId:
+            user.id,
 
-        taskId:
-          task.id
+          body:
+            `${req.user.full_name} completed a Task`,
 
-      });
+          taskId:
+            task.id
+
+        });
+      }
 
       return createSuccessResponse(
         res,
@@ -2290,10 +2292,46 @@ export const createJobServiceSheet = async (req, res) => {
     workToBeCarriedOut,
     workCarriedOut,
     furtherActionRequired,
+    further_action_required,
     cdsSignature,
     materials,
+    partsUsed,
+    extraPartsUsed,
 
   } = req.body;
+
+  const normalizedFurtherActionRequired =
+    furtherActionRequired ?? further_action_required;
+
+  const parseArrayField = (value) => {
+    if (!value) {
+      return [];
+    }
+
+    if (Array.isArray(value)) {
+      return value;
+    }
+
+    if (typeof value === "string") {
+      try {
+        const parsedValue = JSON.parse(value);
+        return Array.isArray(parsedValue) ? parsedValue : [];
+      } catch (parseError) {
+        return [];
+      }
+    }
+
+    return [];
+  };
+
+  const normalizedMaterialsInput =
+    parseArrayField(materials);
+
+  const normalizedPartsUsedInput =
+    parseArrayField(partsUsed);
+
+  const normalizedExtraPartsInput =
+    parseArrayField(extraPartsUsed);
 
   const schema = Joi.object({
     taskId: Joi.number().integer().required(),
@@ -2304,17 +2342,53 @@ export const createJobServiceSheet = async (req, res) => {
     mobile: Joi.string().optional(),
     workToBeCarriedOut: Joi.string().optional(),
     workCarriedOut: Joi.string().optional(),
+    furtherActionRequired: Joi.string().optional().allow(""),
+    further_action_required: Joi.string().optional().allow(""),
     cdsSignature: Joi.string().optional(),
-    materials: Joi.array().items(Joi.object({
-      materialName: Joi.string().required(),
-      unitsUsed: Joi.number().required(),
-      pricePerUnit: Joi.number().optional(),
-      totalPrice: Joi.number().required()
-    })).required(),
+    materials: Joi.alternatives().try(
+      Joi.array().items(Joi.object({
+        materialName: Joi.string().required(),
+        unitsUsed: Joi.number().required(),
+        pricePerUnit: Joi.number().optional(),
+        totalPrice: Joi.number().required()
+      })),
+      Joi.string()
+    ).optional(),
+    partsUsed: Joi.alternatives().try(
+      Joi.array().items(Joi.object({
+        id: Joi.number().integer().optional(),
+        partId: Joi.number().integer().optional(),
+        materialName: Joi.string().optional(),
+        name: Joi.string().optional(),
+        partName: Joi.string().optional(),
+        unitsUsed: Joi.number().optional(),
+        quantity: Joi.number().optional(),
+        pricePerUnit: Joi.number().optional(),
+        totalPrice: Joi.number().optional()
+      })),
+      Joi.string()
+    ).optional(),
+    extraPartsUsed: Joi.alternatives().try(
+      Joi.array().items(Joi.object({
+        materialName: Joi.string().optional(),
+        name: Joi.string().optional(),
+        partName: Joi.string().optional(),
+        unitsUsed: Joi.number().optional(),
+        quantity: Joi.number().optional()
+      })),
+      Joi.string()
+    ).optional(),
   });
 
 
-  const { error } = schema.validate(req.body);
+  const payloadToValidate = {
+    ...req.body,
+    materials: normalizedMaterialsInput,
+    partsUsed: normalizedPartsUsedInput,
+    extraPartsUsed: normalizedExtraPartsInput,
+  };
+
+  const { error } = schema.validate(payloadToValidate);
   if (error) {
     const message = error.details.map((i) => i.message).join(", ");
     return res.status(400).json({
@@ -2326,13 +2400,20 @@ export const createJobServiceSheet = async (req, res) => {
   }
 
   try {
-    const task = await prisma.task.findUnique({
+    void normalizedFurtherActionRequired;
+
+    const task = await prisma.task.findFirst({
       where: {
         id: parseInt(taskId),
         assignStaffId: req.user.id
       },
       include: {
-        JobServiceSheet: true
+        JobServiceSheet: {
+          include: {
+            Material: true
+          }
+        },
+        user: true
       }
     });
 
@@ -2341,40 +2422,187 @@ export const createJobServiceSheet = async (req, res) => {
 
     }
 
-    if (task.JobServiceSheet.length > 0) {
-      return createErrorResponse(res, 400, MessageEnum.CDS_ALREADY_CREATED);
-    }
+    const selectedPartIds =
+      normalizedPartsUsedInput
+        .map((part) =>
+          parseInt(part.partId ?? part.id)
+        )
+        .filter((partId) => !Number.isNaN(partId));
 
-    const jobServiceSheet = await prisma.jobServiceSheet.create({
-      data: {
-        date: new Date(date),
-        taskId: parseInt(taskId),
-        staffId: req.user.id,
-        jobNumber,
-        personAttending,
-        customerName,
-        mobile,
-        workToBeCarriedOut,
-        workCarriedOut,
-        cdsSignature,
-      },
+    const inventoryParts =
+      selectedPartIds.length > 0
+        ? await prisma.partInventory.findMany({
+          where: {
+            userId: task.userId,
+            id: {
+              in: selectedPartIds
+            }
+          }
+        })
+        : [];
+
+    const inventoryPartMap =
+      new Map(
+        inventoryParts.map((part) => [
+          part.id,
+          part
+        ])
+      );
+
+    const materialRows = [];
+
+    normalizedMaterialsInput.forEach((material) => {
+      const unitsUsed =
+        parseFloat(material.unitsUsed);
+
+      const pricePerUnit =
+        material.pricePerUnit !== undefined &&
+        material.pricePerUnit !== null &&
+        material.pricePerUnit !== ""
+          ? parseFloat(material.pricePerUnit)
+          : null;
+
+      const totalPrice =
+        material.totalPrice !== undefined &&
+        material.totalPrice !== null &&
+        material.totalPrice !== ""
+          ? parseFloat(material.totalPrice)
+          : (pricePerUnit || 0) * unitsUsed;
+
+      materialRows.push({
+        materialName: material.materialName,
+        unitsUsed,
+        pricePerUnit,
+        totalPrice
+      });
     });
 
-    if (materials && materials.length > 0) {
-      const materialData = materials.map((material) => {
-        // const totalPrice = material.unitsUsed * (material.pricePerUnit || 0);
-        return {
+    normalizedPartsUsedInput.forEach((part) => {
+      const partId =
+        parseInt(part.partId ?? part.id);
+
+      const inventoryPart =
+        inventoryPartMap.get(partId);
+
+      const materialName =
+        inventoryPart?.name ||
+        part.materialName ||
+        part.name ||
+        part.partName;
+
+      const unitsUsed =
+        parseFloat(part.unitsUsed ?? part.quantity ?? 0);
+
+      if (!materialName || Number.isNaN(unitsUsed) || unitsUsed <= 0) {
+        return;
+      }
+
+      const fallbackPricePerUnit =
+        inventoryPart?.boat_owner_cost ??
+        inventoryPart?.original_cost ??
+        0;
+
+      const pricePerUnit =
+        part.pricePerUnit !== undefined &&
+        part.pricePerUnit !== null &&
+        part.pricePerUnit !== ""
+          ? parseFloat(part.pricePerUnit)
+          : fallbackPricePerUnit;
+
+      const totalPrice =
+        part.totalPrice !== undefined &&
+        part.totalPrice !== null &&
+        part.totalPrice !== ""
+          ? parseFloat(part.totalPrice)
+          : unitsUsed * pricePerUnit;
+
+      materialRows.push({
+        materialName,
+        unitsUsed,
+        pricePerUnit,
+        totalPrice
+      });
+    });
+
+    const extraPartsRequests =
+      normalizedExtraPartsInput
+        .map((part) => {
+          const partName =
+            part.partName ||
+            part.name ||
+            part.materialName;
+
+          const unitsUsed =
+            parseFloat(part.unitsUsed ?? part.quantity ?? 0);
+
+          if (!partName || Number.isNaN(unitsUsed) || unitsUsed <= 0) {
+            return null;
+          }
+
+          return {
+            partName,
+            unitsUsed
+          };
+        })
+        .filter(Boolean);
+
+    extraPartsRequests.forEach((part) => {
+      materialRows.push({
+        materialName: part.partName,
+        unitsUsed: part.unitsUsed,
+        pricePerUnit: 0,
+        totalPrice: 0
+      });
+    });
+
+    const jobSheetPayload = {
+      date: new Date(date),
+      taskId: parseInt(taskId),
+      boatId: task.boatId,
+      userId: task.userId,
+      staffId: req.user.id,
+      jobNumber,
+      personAttending,
+      customerName,
+      mobile,
+      workToBeCarriedOut,
+      workCarriedOut,
+      cdsSignature,
+    };
+
+    let jobServiceSheet =
+      task.JobServiceSheet[0] || null;
+
+    if (jobServiceSheet) {
+      jobServiceSheet =
+        await prisma.jobServiceSheet.update({
+          where: {
+            id: jobServiceSheet.id
+          },
+          data: jobSheetPayload
+        });
+
+      await prisma.material.deleteMany({
+        where: {
+          jobServiceSheetId: jobServiceSheet.id
+        }
+      });
+    } else {
+      jobServiceSheet =
+        await prisma.jobServiceSheet.create({
+          data: jobSheetPayload
+        });
+    }
+
+    if (materialRows.length > 0) {
+      await prisma.material.createMany({
+        data: materialRows.map((material) => ({
           jobServiceSheetId: jobServiceSheet.id,
           materialName: material.materialName,
-          unitsUsed: parseFloat(material.unitsUsed),
-          pricePerUnit: parseFloat(material.pricePerUnit) || null,
-          totalPrice: parseFloat(material.totalPrice),
-        };
-      });
-
-      // Create materials in the database
-      await prisma.material.createMany({
-        data: materialData,
+          unitsUsed: material.unitsUsed,
+          pricePerUnit: material.pricePerUnit,
+          totalPrice: material.totalPrice,
+        })),
       });
     }
 
@@ -2385,9 +2613,39 @@ export const createJobServiceSheet = async (req, res) => {
       data: {
         status: 2
       }
-    })
+    });
 
-    return createSuccessResponse(res, 200, true, MessageEnum.JOB_SERVICE_SHEET, jobServiceSheet);
+    if (extraPartsRequests.length > 0) {
+      const requestMessage =
+        `${req.user.full_name} requested extra parts for CDS Job Sheet`;
+
+      await createNotification({
+        toUserId: task.userId,
+        byStaffId: req.user.id,
+        taskId: task.id,
+        type: "extra_part_request",
+        data: {
+          requestedParts: extraPartsRequests,
+          jobServiceSheetId: jobServiceSheet.id
+        },
+        content: requestMessage
+      });
+
+      await sendNotificationRelateToTask({
+        token: task.user?.fcm_token,
+        toUserId: task.userId,
+        body: requestMessage,
+        taskId: task.id
+      });
+    }
+
+    const responseData = {
+      ...jobServiceSheet,
+      materials: materialRows,
+      extraPartsRequested: extraPartsRequests
+    };
+
+    return createSuccessResponse(res, 200, true, MessageEnum.JOB_SERVICE_SHEET, responseData);
   } catch (error) {
     console.error(error);
     return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
@@ -2804,3 +3062,51 @@ export async function getTaskById(req, res) {
     return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
   }
 };
+
+
+export async function getAllParts(req, res) {
+  try {
+    const parts =
+      await prisma.partInventory.findMany({
+        where: {
+          userId: req.user.userId
+        },
+        orderBy: {
+          id: 'desc'
+        }
+      });
+    const formatted =
+      parts.map((part, index) => ({
+        sr_no:
+          index + 1,
+        id:
+          part.id,
+        name:
+          part.name,
+        original_cost:
+          part.original_cost,
+        boat_owner_cost:
+          part.boat_owner_cost,
+        stock_quantity:
+          part.stock_quantity,
+        low_stock_alert:
+          part.low_stock_alert,
+        low_stock:
+          part.stock_quantity <= part.low_stock_alert,
+      }));
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      "Parts fetched successfully",
+      formatted
+    );
+  } catch (error) {
+    console.log(error);
+    return createErrorResponse(
+      res,
+      500,
+      MessageEnum.INTERNAL_SERVER_ERROR
+    );
+  }
+}
