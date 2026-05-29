@@ -13,6 +13,10 @@ import { MessageEnum } from '../config/message.js';
 import { createErrorResponse, createSuccessResponse } from '../utils/responseUtil.js';
 import { sendEmail } from '../utils/sendMail.js';
 import { createNotification, sendNotificationRelateToTask } from '../utils/notification.js';
+import {
+  getAvailablePartsForTaskUser,
+  getExtraPartRequestsForTask
+} from './extraPartRequestController.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -792,7 +796,6 @@ export const createJobServiceSheet = async (req, res) => {
     cdsSignature,
     materials,
     partsUsed,
-    extraPartsUsed,
   } = req.body;
 
   const normalizedFurtherActionRequired =
@@ -814,7 +817,6 @@ export const createJobServiceSheet = async (req, res) => {
 
   const normalizedMaterialsInput = parseArrayField(materials);
   const normalizedPartsUsedInput = parseArrayField(partsUsed);
-  const normalizedExtraPartsInput = parseArrayField(extraPartsUsed);
 
   const schema = Joi.object({
     taskId: Joi.number().integer().required(),
@@ -851,23 +853,12 @@ export const createJobServiceSheet = async (req, res) => {
       })),
       Joi.string()
     ).optional(),
-    extraPartsUsed: Joi.alternatives().try(
-      Joi.array().items(Joi.object({
-        materialName: Joi.string().optional(),
-        name: Joi.string().optional(),
-        partName: Joi.string().optional(),
-        unitsUsed: Joi.number().optional(),
-        quantity: Joi.number().optional()
-      })),
-      Joi.string()
-    ).optional(),
   });
 
   const payloadToValidate = {
     ...req.body,
     materials: normalizedMaterialsInput,
     partsUsed: normalizedPartsUsedInput,
-    extraPartsUsed: normalizedExtraPartsInput,
   };
 
   const { error } = schema.validate(payloadToValidate);
@@ -901,6 +892,25 @@ export const createJobServiceSheet = async (req, res) => {
 
     if (!task) {
       return createErrorResponse(res, 404, MessageEnum.TASK_NOT_FOUND);
+    }
+
+    const existingExtraPartRequests = await getExtraPartRequestsForTask({
+      taskId: task.id,
+      requesterType: "SUPPLIER",
+      requesterId: req.user.id,
+    });
+
+    const pendingExtraPartRequests = existingExtraPartRequests.filter(
+      (request) => request.status !== "FULFILLED"
+    );
+
+    if (pendingExtraPartRequests.length > 0) {
+      return res.status(200).json({
+        success: false,
+        message: "Extra parts request is still pending from user side. Please wait until all requested parts are added before updating the CDS Job Sheet.",
+        status: 200,
+        data: {},
+      });
     }
 
     const selectedPartIds = normalizedPartsUsedInput
@@ -982,31 +992,6 @@ export const createJobServiceSheet = async (req, res) => {
       });
     });
 
-    const extraPartsRequests = normalizedExtraPartsInput
-      .map((part) => {
-        const partName = part.partName || part.name || part.materialName;
-        const unitsUsed = parseFloat(part.unitsUsed ?? part.quantity ?? 0);
-
-        if (!partName || Number.isNaN(unitsUsed) || unitsUsed <= 0) {
-          return null;
-        }
-
-        return {
-          partName,
-          unitsUsed
-        };
-      })
-      .filter(Boolean);
-
-    extraPartsRequests.forEach((part) => {
-      materialRows.push({
-        materialName: part.partName,
-        unitsUsed: part.unitsUsed,
-        pricePerUnit: 0,
-        totalPrice: 0
-      });
-    });
-
     const jobSheetPayload = {
       date: new Date(date),
       taskId: parseInt(taskId),
@@ -1064,34 +1049,9 @@ export const createJobServiceSheet = async (req, res) => {
       },
     });
 
-    if (extraPartsRequests.length > 0) {
-      const requestMessage =
-        `${req.user.company_name || req.user.email} requested extra parts for CDS Job Sheet`;
-
-      await createNotification({
-        toUserId: task.userId,
-        taskId: task.id,
-        type: "extra_part_request",
-        data: {
-          requestedParts: extraPartsRequests,
-          jobServiceSheetId: jobServiceSheet.id,
-          supplierId: req.user.id
-        },
-        content: requestMessage
-      });
-
-      await sendNotificationRelateToTask({
-        token: task.user?.fcm_token,
-        toUserId: task.userId,
-        body: requestMessage,
-        taskId: task.id
-      });
-    }
-
     const responseData = {
       ...jobServiceSheet,
       materials: materialRows,
-      extraPartsRequested: extraPartsRequests
     };
 
     return createSuccessResponse(res, 200, true, MessageEnum.JOB_SERVICE_SHEET, responseData);
@@ -1702,7 +1662,6 @@ export async function getTaskById(req, res) {
         message: "Valid task id is required",
       });
     }
-
     const task = await prisma.task.findFirst({
       where: {
         id: taskId,
@@ -1748,10 +1707,17 @@ export async function getTaskById(req, res) {
         },
       },
     });
-
     if (!task) {
       return createErrorResponse(res, 404, MessageEnum.TASK_NOT_FOUND);
     }
+
+    const extraPartRequests = await getExtraPartRequestsForTask({
+      taskId: task.id,
+      requesterType: "SUPPLIER",
+      requesterId: req.user.id,
+    });
+
+    const availableParts = await getAvailablePartsForTaskUser(task.userId);
 
     const serviceItems = task.TaskServices.map((service) => ({
       taskServiceId: service.id,
@@ -1785,9 +1751,12 @@ export async function getTaskById(req, res) {
         taskServiceId: service.id,
         serviceId: service.serviceId,
         serviceName: service.serviceName,
+        task_description: task.taskDescription,
         servicePrice: Number(service.servicePrice || 0),
       })),
       photos: task.TaskPhoto,
+      extraPartRequests,
+      availableParts,
       jobServiceSheets: task.JobServiceSheet.map((sheet) => ({
         ...sheet,
         materials: sheet.Material || [],
@@ -1847,6 +1816,14 @@ export async function getJobDetailById(req, res) {
       return createErrorResponse(res, 404, MessageEnum.TASK_NOT_FOUND);
     }
 
+    const extraPartRequests = await getExtraPartRequestsForTask({
+      taskId: task.id,
+      requesterType: "SUPPLIER",
+      requesterId: req.user.id,
+    });
+
+    const availableParts = await getAvailablePartsForTaskUser(task.userId);
+
     const primaryJobSheet = task.JobServiceSheet?.[0] || null;
 
     const services = task.TaskServices.map((service) => ({
@@ -1892,6 +1869,8 @@ export async function getJobDetailById(req, res) {
       services,
       TaskServices: task.TaskServices,
       photos: task.TaskPhoto || [],
+      extraPartRequests,
+      availableParts,
       serviceSheet: {
         exists: !!primaryJobSheet,
         jobServiceSheetId: primaryJobSheet?.id || null,

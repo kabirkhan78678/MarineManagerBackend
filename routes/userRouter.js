@@ -9,6 +9,10 @@ import { profileupload } from "../middlewares/profile.js";
 import {
     changePasswordValidation
 } from '../validators/userValidation.js';
+import {
+    fulfillExtraPartRequest,
+    getUserExtraPartRequests
+} from "../controllers/extraPartRequestController.js";
 
 export const userRouter = express.Router();
 
@@ -102,4 +106,16 @@ userRouter.delete(
     '/parts/:id',
     auth,
     deletePart
+);
+
+userRouter.get(
+    '/extra-part-requests',
+    auth,
+    getUserExtraPartRequests
+);
+
+userRouter.post(
+    '/extra-part-requests/add-part',
+    auth,
+    fulfillExtraPartRequest
 );

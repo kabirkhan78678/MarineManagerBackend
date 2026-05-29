@@ -5,6 +5,10 @@ import { auth } from "../middlewares/auth.js";
 import { staffAuth } from "../middlewares/staffAuth.js";
 import { supplierauth } from "../middlewares/supplierAuth.js";
 import { upload } from "../middlewares/upload.js";
+import {
+    createStaffExtraPartRequest,
+    getStaffExtraPartRequests
+} from "../controllers/extraPartRequestController.js";
 
 export const staffRouter = express.Router();
 
@@ -74,6 +78,14 @@ staffRouter.post('/updateTaskTimer', staffAuth ,updateTaskTimer);
 
 staffRouter.post('/getTaskById', staffAuth, getTaskById);
 
+staffRouter.get('/getTaskById/:taskId', staffAuth, getTaskById);
+
+staffRouter.get('/getStaffMember/:taskId', staffAuth, getTaskById);
+
 staffRouter.get('/getAllParts', staffAuth, getAllParts);
 
-staffRouter.get('/parts', staffAuth, getAllParts);
+// staffRouter.get('/parts', staffAuth, getAllParts);
+
+staffRouter.post('/extra-part-requests', staffAuth, createStaffExtraPartRequest);
+
+staffRouter.get('/extra-part-requests', staffAuth, getStaffExtraPartRequests);

@@ -4,6 +4,10 @@ import { addSupplier, editSupplier , getAllSuppliers, getSupplierById, getTaskBy
 import { supplierauth } from "../middlewares/supplierAuth.js";
 import { upload } from "../middlewares/upload.js";
 import { profileupload } from "../middlewares/profile.js";
+import {
+    createSupplierExtraPartRequest,
+    getSupplierExtraPartRequests
+} from "../controllers/extraPartRequestController.js";
 export const supplierRouter = express.Router();
 
 supplierRouter.post('/addsupllier', auth, addSupplier);
@@ -50,9 +54,12 @@ supplierRouter.get('/getJobDetailById/:taskId', supplierauth, getJobDetailById);
 
 supplierRouter.get('/getCommencedTaskDetailById/:taskId', supplierauth, getCommencedTaskDetailById);
 
-
 supplierRouter.post('/respondToTaskOffer',supplierauth, respondToTaskOffer)
 
 supplierRouter.get('/getAllParts', supplierauth, getAllParts);
 
-supplierRouter.get('/parts', supplierauth, getAllParts);
+// supplierRouter.get('/parts', supplierauth, getAllParts);
+
+supplierRouter.post('/extra-part-requests', supplierauth, createSupplierExtraPartRequest);
+
+supplierRouter.get('/extra-part-requests', supplierauth, getSupplierExtraPartRequests);
