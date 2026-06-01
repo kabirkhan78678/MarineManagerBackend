@@ -18,6 +18,18 @@ import {
   handleError
 } from '../utils/responseHandler.js';
 
+// ✅ Warranty Status Helper 
+function getWarrantyStatus(warrantyEndDate) {
+  if (!warrantyEndDate) return null;
+  const today = new Date();
+  const endDate = new Date(warrantyEndDate);
+  const diffDays = Math.ceil((endDate - today) / (1000 * 60 * 60 * 24));
+
+  if (diffDays < 0)   return { status: "EXPIRED",       daysRemaining: 0 };
+  if (diffDays <= 30) return { status: "EXPIRING_SOON", daysRemaining: diffDays };
+  return               { status: "ACTIVE",              daysRemaining: diffDays };
+}
+
 const prisma = new PrismaClient();
 const baseurl = process.env.BASE_URL;
 const __filename = fileURLToPath(import.meta.url);
@@ -2478,7 +2490,15 @@ export async function createPart(req, res) {
       original_cost,
       boat_owner_cost,
       stock_quantity,
-      low_stock_alert
+      low_stock_alert,
+      warranty_duration,
+      warranty_type,
+      part_number,
+      manufacturer,
+      serial_number,
+      installation_date,
+      warranty_start_date,
+      warranty_end_date,
     } = req.body;
 
     const schema = Joi.object({
@@ -2497,6 +2517,30 @@ export async function createPart(req, res) {
 
       low_stock_alert:
         Joi.number().optional(),
+
+      warranty_duration:
+        Joi.number().optional(),
+
+      warranty_type:
+        Joi.string().valid("DAYS", "MONTHS", "YEARS").optional(),
+
+      part_number:
+        Joi.string().optional().allow(""),
+
+      manufacturer:
+        Joi.string().optional().allow(""),
+
+      serial_number:
+        Joi.string().optional().allow(""),
+
+      installation_date:
+        Joi.date().optional(),
+
+      warranty_start_date:
+        Joi.date().optional(),
+
+      warranty_end_date:
+        Joi.date().optional(),
     });
 
     const { error } =
@@ -2516,29 +2560,28 @@ export async function createPart(req, res) {
       );
     }
 
+    const warranty_document_url = req.files?.warranty_document?.[0]?.filename || null;
+
     const part =
       await prisma.partInventory.create({
 
         data: {
 
-          userId:
-            req.user.id,
-
+          userId: req.user.id,
           name,
-
-          original_cost:
-            parseFloat(original_cost),
-
-          boat_owner_cost:
-            parseFloat(boat_owner_cost),
-
-          stock_quantity:
-            parseInt(stock_quantity),
-
-          low_stock_alert:
-            low_stock_alert
-              ? parseInt(low_stock_alert)
-              : 10,
+          original_cost: parseFloat(original_cost),
+          boat_owner_cost: parseFloat(boat_owner_cost),
+          stock_quantity: parseInt(stock_quantity),
+          low_stock_alert: low_stock_alert ? parseInt(low_stock_alert) : 10,
+          warranty_duration: warranty_duration ? parseInt(warranty_duration) : null,
+          warranty_type: warranty_type || "MONTHS",
+          part_number: part_number || null,
+          manufacturer: manufacturer || null,
+          serial_number: serial_number || null,
+          installation_date: installation_date ? new Date(installation_date) : null,
+          warranty_start_date: warranty_start_date ? new Date(warranty_start_date) : null,
+          warranty_end_date: warranty_end_date ? new Date(warranty_end_date) : null,
+          warranty_document_url,
         }
       });
 
@@ -2564,49 +2607,32 @@ export async function createPart(req, res) {
 
 
 export async function getAllParts(req, res) {
-
   try {
-
     const parts =
       await prisma.partInventory.findMany({
-
-        where: {
-          userId: req.user.id
-        },
-
-        orderBy: {
-          id: 'desc'
-        }
+        where: { userId: req.user.id },
+        orderBy: { id: 'desc' }
       });
-
-    const formatted =
-      parts.map((part, index) => ({
-
-        sr_no:
-          index + 1,
-
-        id:
-          part.id,
-
-        name:
-          part.name,
-
-        original_cost:
-          part.original_cost,
-
-        boat_owner_cost:
-          part.boat_owner_cost,
-
-        stock_quantity:
-          part.stock_quantity,
-
-        low_stock_alert:
-          part.low_stock_alert,
-
-        low_stock:
-          part.stock_quantity <= part.low_stock_alert,
-      }));
-
+    const formatted = parts.map((part, index) => ({
+      sr_no: index + 1,
+      id: part.id,
+      name: part.name,
+      original_cost: part.original_cost,
+      boat_owner_cost: part.boat_owner_cost,
+      stock_quantity: part.stock_quantity,
+      low_stock_alert: part.low_stock_alert,
+      low_stock: part.stock_quantity <= part.low_stock_alert,
+      warranty_duration: part.warranty_duration,
+      warranty_type: part.warranty_type,
+      part_number: part.part_number,
+      manufacturer: part.manufacturer,
+      serial_number: part.serial_number,
+      installation_date: part.installation_date,
+      warranty_start_date: part.warranty_start_date,
+      warranty_end_date: part.warranty_end_date,
+      warranty_document_url: part.warranty_document_url,
+      warranty: getWarrantyStatus(part.warranty_end_date),
+    }));
     return createSuccessResponse(
       res,
       200,
@@ -2614,11 +2640,8 @@ export async function getAllParts(req, res) {
       "Parts fetched successfully",
       formatted
     );
-
   } catch (error) {
-
     console.log(error);
-
     return createErrorResponse(
       res,
       500,
@@ -2628,134 +2651,94 @@ export async function getAllParts(req, res) {
 }
 
 export async function getPartById(req, res) {
-
   try {
-
-    const id =
-      parseInt(req.params.id);
-
-    const part =
-      await prisma.partInventory.findFirst({
-
-        where: {
-
-          id,
-
-          userId:
-            req.user.id
-        }
-      });
-
+    const id = parseInt(req.params.id);
+    const part = await prisma.partInventory.findFirst({
+      where: { id, userId: req.user.id }
+    });
     if (!part) {
-
       return createErrorResponse(
         res,
         404,
         "Part not found"
       );
     }
-
     return createSuccessResponse(
       res,
       200,
       true,
       "Part detail fetched successfully",
       {
-
         ...part,
-
         low_stock:
-          part.stock_quantity <=
-          part.low_stock_alert,
+          part.stock_quantity <= part.low_stock_alert,
+        warranty: getWarrantyStatus(part.warranty_end_date),
       }
     );
 
   } catch (error) {
-
     console.log(error);
-
-    return createErrorResponse(
-      res,
-      500,
-      MessageEnum.INTERNAL_SERVER_ERROR
-    );
+    return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
   }
 }
 
 
 export async function updatePart(req, res) {
-
   try {
-
-    const id =
-      parseInt(req.params.id);
-
-    const existingPart =
-      await prisma.partInventory.findFirst({
-
-        where: {
-
-          id,
-
-          userId:
-            req.user.id
-        }
-      });
-
+    const id = parseInt(req.params.id);
+    const existingPart = await prisma.partInventory.findFirst({
+      where: { id, userId: req.user.id }
+    });
     if (!existingPart) {
-
-      return createErrorResponse(
-        res,
-        404,
-        "Part not found"
-      );
+      return createErrorResponse(res, 404, "Part not found");
     }
-
     const {
       name,
       original_cost,
       boat_owner_cost,
       stock_quantity,
-      low_stock_alert
+      low_stock_alert,
+      warranty_duration,
+      warranty_type,
+      part_number,
+      manufacturer,
+      serial_number,
+      installation_date,
+      warranty_start_date,
+      warranty_end_date,
     } = req.body;
 
-    const updated =
-      await prisma.partInventory.update({
+    const warranty_document_url = req.files?.warranty_document?.[0]?.filename
+      || existingPart.warranty_document_url;
 
-        where: {
-          id
-        },
+  const updated = await prisma.partInventory.update({
+      where: { id },
+      data: {
+        name:                name               ?? existingPart.name,
+        original_cost:       original_cost      ? parseFloat(original_cost)   : existingPart.original_cost,
+        boat_owner_cost:     boat_owner_cost     ? parseFloat(boat_owner_cost) : existingPart.boat_owner_cost,
+        stock_quantity:      stock_quantity      ? parseInt(stock_quantity)    : existingPart.stock_quantity,
+        low_stock_alert:     low_stock_alert     ? parseInt(low_stock_alert)   : existingPart.low_stock_alert,
+        warranty_duration:   warranty_duration   ? parseInt(warranty_duration) : existingPart.warranty_duration,
+        warranty_type:       warranty_type       ?? existingPart.warranty_type,
+        part_number:         part_number         ?? existingPart.part_number,
+        manufacturer:        manufacturer        ?? existingPart.manufacturer,
+        serial_number:       serial_number       ?? existingPart.serial_number,
+        installation_date:   installation_date   ? new Date(installation_date)    : existingPart.installation_date,
+        warranty_start_date: warranty_start_date ? new Date(warranty_start_date)  : existingPart.warranty_start_date,
+        warranty_end_date:   warranty_end_date   ? new Date(warranty_end_date)    : existingPart.warranty_end_date,
+        warranty_document_url,
+      }
+    });
 
-        data: {
-
-          name,
-
-          original_cost:
-            parseFloat(original_cost),
-
-          boat_owner_cost:
-            parseFloat(boat_owner_cost),
-
-          stock_quantity:
-            parseInt(stock_quantity),
-
-          low_stock_alert:
-            parseInt(low_stock_alert),
-        }
-      });
-
-    return createSuccessResponse(
-      res,
-      200,
-      true,
-      "Part updated successfully",
-      updated
-    );
+    return createSuccessResponse(res, 200, true, "Part updated successfully", {
+      ...updated,
+      low_stock: updated.stock_quantity <= updated.low_stock_alert,
+      warranty: getWarrantyStatus(updated.warranty_end_date),
+    });
 
   } catch (error) {
-
     console.log(error);
-
     return createErrorResponse(
       res,
       500,

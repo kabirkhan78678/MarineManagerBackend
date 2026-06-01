@@ -77,10 +77,13 @@ userRouter.get(
 );
 
 userRouter.post(
-    '/parts',
-    auth,
-    profileupload.single('part_image'),
-    createPart
+  '/parts',
+  auth,
+  profileupload.fields([
+    { name: 'part_image',        maxCount: 1 },
+    { name: 'warranty_document', maxCount: 1 },
+  ]),
+  createPart
 );
 
 userRouter.get(
@@ -96,10 +99,13 @@ userRouter.get(
 );
 
 userRouter.put(
-    '/parts/:id',
-    auth,
-    profileupload.single('part_image'),
-    updatePart
+  '/parts/:id',
+  auth,
+  profileupload.fields([
+    { name: 'part_image',        maxCount: 1 },
+    { name: 'warranty_document', maxCount: 1 },
+  ]),
+  updatePart
 );
 
 userRouter.delete(
