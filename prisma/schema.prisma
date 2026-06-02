@@ -157,6 +157,7 @@ model Supplier {
   about_us                 String?                 @db.LongText
   service_region           String?                 @db.LongText
   services_offered         String?                 @db.LongText
+  role                     String?
   complete_profile_status  Int                     @default(0)
   createdAt                DateTime                @default(now())
   updatedAt                DateTime                @updatedAt

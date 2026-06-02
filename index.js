@@ -27,10 +27,12 @@ import Stripe from "stripe";
 import { subscriptionRouter } from './routes/susbcriptionRouter.js';
 import xeroRouter from './routes/xeroRouter.js';
 import { adminRouter } from './routes/adminRouter.js';
-const stripe = new Stripe("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");
+import { createErrorResponse } from './utils/responseUtil.js';
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // MVP1 Ventures
 import { createProxyMiddleware } from "http-proxy-middleware";
+import { boatPartRouter } from './routes/boatPartRouter.js';
 
 
 const prisma = new PrismaClient();
@@ -55,7 +57,7 @@ app.use(cors({
 
 
 //const webhookSecret = 'whsec_26d8f5d4fc992a5509d791e5e5602d8167876013ac1b7035ad8023dcd2ca2781';
-const webhookSecret = 'whsec_Iz8xPtw6oc6BCvgsZIBn6SNXFyQoJkdb';
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
 
@@ -286,6 +288,18 @@ app.use(
   })
 );
 
+app.use((error, req, res, next) => {
+  if (error instanceof SyntaxError && error.status === 400 && "body" in error) {
+    return createErrorResponse(
+      res,
+      400,
+      "Invalid JSON body. Please send a valid JSON object."
+    );
+  }
+
+  next(error);
+});
+
 // MVP1 Ventures
 app.use(
   "/n8n-api",
@@ -331,6 +345,7 @@ app.use('/subscription', subscriptionRouter);
 app.use('/services', serviceRouter);
 app.use('/xero', xeroRouter);
 app.use('/admin', adminRouter);
+app.use("/boatParts", boatPartRouter);
 
 // MVP1 Ventures Commented - Start
 // app.get("/", (req, res) => {

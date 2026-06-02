@@ -11,8 +11,9 @@ import { PrismaClient } from '@prisma/client';
 import { getDateRanges, randomStringAsBase64Url } from '../utils/helper.js';
 import { MessageEnum } from '../config/message.js';
 import Stripe from "stripe";
-const stripe = new Stripe("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");
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 import { createErrorResponse, createSuccessResponse } from '../utils/responseUtil.js';
+import { mysqlQuery } from '../utils/mysqlDb.js';
 import {
   handleSuccess,
   handleError
@@ -28,6 +29,27 @@ function getWarrantyStatus(warrantyEndDate) {
   if (diffDays < 0)   return { status: "EXPIRED",       daysRemaining: 0 };
   if (diffDays <= 30) return { status: "EXPIRING_SOON", daysRemaining: diffDays };
   return               { status: "ACTIVE",              daysRemaining: diffDays };
+}
+
+function formatPartInventoryResponse(part, index = null) {
+  const warranty = getWarrantyStatus(part.warranty_end_date);
+
+  return {
+    ...(index !== null ? { sr_no: index + 1 } : {}),
+    id: part.id,
+    name: part.name ?? null,
+    original_cost: part.original_cost,
+    boat_owner_cost: part.boat_owner_cost,
+    stock_quantity: part.stock_quantity,
+    low_stock_alert: part.low_stock_alert,
+    low_stock: Number(part.stock_quantity) <= Number(part.low_stock_alert),
+    warranty_duration: part.warranty_duration ?? null,
+    warranty_type: part.warranty_type ?? null,
+    part_number: part.part_number ?? null,
+    manufacturer: part.manufacturer ?? null,
+    serial_number: part.serial_number ?? null,
+    ...(warranty ? { warranty } : {}),
+  };
 }
 
 const prisma = new PrismaClient();
@@ -157,8 +179,6 @@ export async function signup(req, res) {
             id: parseInt(planId)
           }
         })
-
-        // Step 3: Start a 30-Day Trial
         const subscription = await stripe.subscriptions.create({
           customer: customer.id,
           items: [{ price: plan.stripePriceId }], // Replace with actual Stripe Price ID
@@ -2482,9 +2502,7 @@ export async function getSupplierWorkedBoatById(req, res) {
 }
 
 export async function createPart(req, res) {
-
   try {
-
     const {
       name,
       original_cost,
@@ -2496,9 +2514,6 @@ export async function createPart(req, res) {
       part_number,
       manufacturer,
       serial_number,
-      installation_date,
-      warranty_start_date,
-      warranty_end_date,
     } = req.body;
 
     const schema = Joi.object({
@@ -2532,15 +2547,6 @@ export async function createPart(req, res) {
 
       serial_number:
         Joi.string().optional().allow(""),
-
-      installation_date:
-        Joi.date().optional(),
-
-      warranty_start_date:
-        Joi.date().optional(),
-
-      warranty_end_date:
-        Joi.date().optional(),
     });
 
     const { error } =
@@ -2559,38 +2565,39 @@ export async function createPart(req, res) {
         message
       );
     }
+    const result = await mysqlQuery(
+      `INSERT INTO \`PartInventory\`
+        (userId, name, original_cost, boat_owner_cost, stock_quantity, low_stock_alert,
+         warranty_duration, warranty_type, part_number, manufacturer, serial_number,
+         createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+      [
+        req.user.id,
+        name,
+        parseFloat(original_cost),
+        parseFloat(boat_owner_cost),
+        parseInt(stock_quantity),
+        low_stock_alert ? parseInt(low_stock_alert) : 10,
+        warranty_duration ? parseInt(warranty_duration) : null,
+        warranty_type || "MONTHS",
+        part_number || null,
+        manufacturer || null,
+        serial_number || null,
+      ]
+    );
 
-    const warranty_document_url = req.files?.warranty_document?.[0]?.filename || null;
-
-    const part =
-      await prisma.partInventory.create({
-
-        data: {
-
-          userId: req.user.id,
-          name,
-          original_cost: parseFloat(original_cost),
-          boat_owner_cost: parseFloat(boat_owner_cost),
-          stock_quantity: parseInt(stock_quantity),
-          low_stock_alert: low_stock_alert ? parseInt(low_stock_alert) : 10,
-          warranty_duration: warranty_duration ? parseInt(warranty_duration) : null,
-          warranty_type: warranty_type || "MONTHS",
-          part_number: part_number || null,
-          manufacturer: manufacturer || null,
-          serial_number: serial_number || null,
-          installation_date: installation_date ? new Date(installation_date) : null,
-          warranty_start_date: warranty_start_date ? new Date(warranty_start_date) : null,
-          warranty_end_date: warranty_end_date ? new Date(warranty_end_date) : null,
-          warranty_document_url,
-        }
-      });
+    const rows = await mysqlQuery(
+      "SELECT * FROM `PartInventory` WHERE id = ? LIMIT 1",
+      [result.insertId]
+    );
+    const part = rows[0];
 
     return createSuccessResponse(
       res,
       200,
       true,
       "Part created successfully",
-      part
+      formatPartInventoryResponse(part)
     );
 
   } catch (error) {
@@ -2608,31 +2615,13 @@ export async function createPart(req, res) {
 
 export async function getAllParts(req, res) {
   try {
-    const parts =
-      await prisma.partInventory.findMany({
-        where: { userId: req.user.id },
-        orderBy: { id: 'desc' }
-      });
-    const formatted = parts.map((part, index) => ({
-      sr_no: index + 1,
-      id: part.id,
-      name: part.name,
-      original_cost: part.original_cost,
-      boat_owner_cost: part.boat_owner_cost,
-      stock_quantity: part.stock_quantity,
-      low_stock_alert: part.low_stock_alert,
-      low_stock: part.stock_quantity <= part.low_stock_alert,
-      warranty_duration: part.warranty_duration,
-      warranty_type: part.warranty_type,
-      part_number: part.part_number,
-      manufacturer: part.manufacturer,
-      serial_number: part.serial_number,
-      installation_date: part.installation_date,
-      warranty_start_date: part.warranty_start_date,
-      warranty_end_date: part.warranty_end_date,
-      warranty_document_url: part.warranty_document_url,
-      warranty: getWarrantyStatus(part.warranty_end_date),
-    }));
+    const parts = await mysqlQuery(
+      "SELECT * FROM `PartInventory` WHERE userId = ? ORDER BY id DESC",
+      [req.user.id]
+    );
+    const formatted = parts.map((part, index) =>
+      formatPartInventoryResponse(part, index)
+    );
     return createSuccessResponse(
       res,
       200,
@@ -2653,9 +2642,11 @@ export async function getAllParts(req, res) {
 export async function getPartById(req, res) {
   try {
     const id = parseInt(req.params.id);
-    const part = await prisma.partInventory.findFirst({
-      where: { id, userId: req.user.id }
-    });
+    const rows = await mysqlQuery(
+      "SELECT * FROM `PartInventory` WHERE id = ? AND userId = ? LIMIT 1",
+      [id, req.user.id]
+    );
+    const part = rows[0];
     if (!part) {
       return createErrorResponse(
         res,
@@ -2668,12 +2659,7 @@ export async function getPartById(req, res) {
       200,
       true,
       "Part detail fetched successfully",
-      {
-        ...part,
-        low_stock:
-          part.stock_quantity <= part.low_stock_alert,
-        warranty: getWarrantyStatus(part.warranty_end_date),
-      }
+      formatPartInventoryResponse(part)
     );
 
   } catch (error) {
@@ -2686,9 +2672,11 @@ export async function getPartById(req, res) {
 export async function updatePart(req, res) {
   try {
     const id = parseInt(req.params.id);
-    const existingPart = await prisma.partInventory.findFirst({
-      where: { id, userId: req.user.id }
-    });
+    const existingRows = await mysqlQuery(
+      "SELECT * FROM `PartInventory` WHERE id = ? AND userId = ? LIMIT 1",
+      [id, req.user.id]
+    );
+    const existingPart = existingRows[0];
     if (!existingPart) {
       return createErrorResponse(res, 404, "Part not found");
     }
@@ -2703,39 +2691,44 @@ export async function updatePart(req, res) {
       part_number,
       manufacturer,
       serial_number,
-      installation_date,
-      warranty_start_date,
-      warranty_end_date,
     } = req.body;
 
-    const warranty_document_url = req.files?.warranty_document?.[0]?.filename
-      || existingPart.warranty_document_url;
+    await mysqlQuery(
+      `UPDATE \`PartInventory\`
+       SET name = ?, original_cost = ?, boat_owner_cost = ?, stock_quantity = ?,
+           low_stock_alert = ?, warranty_duration = ?, warranty_type = ?,
+           part_number = ?, manufacturer = ?, serial_number = ?,
+           updatedAt = NOW()
+       WHERE id = ? AND userId = ?`,
+      [
+        name ?? existingPart.name,
+        original_cost ? parseFloat(original_cost) : existingPart.original_cost,
+        boat_owner_cost ? parseFloat(boat_owner_cost) : existingPart.boat_owner_cost,
+        stock_quantity ? parseInt(stock_quantity) : existingPart.stock_quantity,
+        low_stock_alert ? parseInt(low_stock_alert) : existingPart.low_stock_alert,
+        warranty_duration ? parseInt(warranty_duration) : existingPart.warranty_duration,
+        warranty_type ?? existingPart.warranty_type,
+        part_number ?? existingPart.part_number,
+        manufacturer ?? existingPart.manufacturer,
+        serial_number ?? existingPart.serial_number,
+        id,
+        req.user.id,
+      ]
+    );
 
-  const updated = await prisma.partInventory.update({
-      where: { id },
-      data: {
-        name:                name               ?? existingPart.name,
-        original_cost:       original_cost      ? parseFloat(original_cost)   : existingPart.original_cost,
-        boat_owner_cost:     boat_owner_cost     ? parseFloat(boat_owner_cost) : existingPart.boat_owner_cost,
-        stock_quantity:      stock_quantity      ? parseInt(stock_quantity)    : existingPart.stock_quantity,
-        low_stock_alert:     low_stock_alert     ? parseInt(low_stock_alert)   : existingPart.low_stock_alert,
-        warranty_duration:   warranty_duration   ? parseInt(warranty_duration) : existingPart.warranty_duration,
-        warranty_type:       warranty_type       ?? existingPart.warranty_type,
-        part_number:         part_number         ?? existingPart.part_number,
-        manufacturer:        manufacturer        ?? existingPart.manufacturer,
-        serial_number:       serial_number       ?? existingPart.serial_number,
-        installation_date:   installation_date   ? new Date(installation_date)    : existingPart.installation_date,
-        warranty_start_date: warranty_start_date ? new Date(warranty_start_date)  : existingPart.warranty_start_date,
-        warranty_end_date:   warranty_end_date   ? new Date(warranty_end_date)    : existingPart.warranty_end_date,
-        warranty_document_url,
-      }
-    });
+    const updatedRows = await mysqlQuery(
+      "SELECT * FROM `PartInventory` WHERE id = ? AND userId = ? LIMIT 1",
+      [id, req.user.id]
+    );
+    const updated = updatedRows[0];
 
-    return createSuccessResponse(res, 200, true, "Part updated successfully", {
-      ...updated,
-      low_stock: updated.stock_quantity <= updated.low_stock_alert,
-      warranty: getWarrantyStatus(updated.warranty_end_date),
-    });
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      "Part updated successfully",
+      formatPartInventoryResponse(updated)
+    );
 
   } catch (error) {
     console.log(error);
@@ -2755,17 +2748,11 @@ export async function deletePart(req, res) {
     const id =
       parseInt(req.params.id);
 
-    const existingPart =
-      await prisma.partInventory.findFirst({
-
-        where: {
-
-          id,
-
-          userId:
-            req.user.id
-        }
-      });
+    const rows = await mysqlQuery(
+      "SELECT id FROM `PartInventory` WHERE id = ? AND userId = ? LIMIT 1",
+      [id, req.user.id]
+    );
+    const existingPart = rows[0];
 
     if (!existingPart) {
 
@@ -2776,12 +2763,10 @@ export async function deletePart(req, res) {
       );
     }
 
-    await prisma.partInventory.delete({
-
-      where: {
-        id
-      }
-    });
+    await mysqlQuery(
+      "DELETE FROM `PartInventory` WHERE id = ? AND userId = ?",
+      [id, req.user.id]
+    );
 
     return createSuccessResponse(
       res,

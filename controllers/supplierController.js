@@ -13,6 +13,7 @@ import { MessageEnum } from '../config/message.js';
 import { createErrorResponse, createSuccessResponse } from '../utils/responseUtil.js';
 import { sendEmail } from '../utils/sendMail.js';
 import { createNotification, sendNotificationRelateToTask } from '../utils/notification.js';
+import { mysqlQuery } from '../utils/mysqlDb.js';
 import {
   getAvailablePartsForTaskUser,
   getExtraPartRequestsForTask
@@ -162,13 +163,14 @@ const baseurl = process.env.BASE_URL;
 
 export async function addSupplier(req, res) {
   try {
-    const { email, name } = req.body;
+    const { email, name, role } = req.body;
     console.log(req.body);
     console.log("after");
 
     const schema = Joi.object({
       email: Joi.string().min(5).max(255).email({ tlds: { allow: false } }).lowercase().required(),
       name: Joi.string().required(),
+      role: Joi.string().max(255).optional().allow(""),
     });
 
 
@@ -188,6 +190,7 @@ export async function addSupplier(req, res) {
         data: {
           email,
           token: inviteToken,
+          role: role || null,
         },
       });
     } else {
@@ -195,6 +198,7 @@ export async function addSupplier(req, res) {
         where: { id: supplier.id },
         data: {
           token: inviteToken,
+          role: role !== undefined ? role : supplier.role,
         },
       });
     }
@@ -251,7 +255,7 @@ export async function editSupplier(req, res) {
   try {
     console.log("here");
 
-    const { email, company_name, company_description, city, phone_no, id } = req.body;
+    const { company_name, company_description, city, phone_no, id, role } = req.body;
     console.log(req.body);
     console.log("after");
 
@@ -261,6 +265,7 @@ export async function editSupplier(req, res) {
       company_description: Joi.string().optional(),
       city: Joi.string().optional(),
       phone_no: Joi.string().optional(),
+      role: Joi.string().optional().allow(""),
       id: Joi.number().required()
     });
 
@@ -276,17 +281,29 @@ export async function editSupplier(req, res) {
       });
     }
 
-    const supplier = await prisma.supplier.findUnique({
+    const linkedSupplier = await prisma.userSupplier.findUnique({
       where: {
-        id: parseInt(id),
-        userId: req.user.id
+        userId_supplierId: {
+          userId: req.user.id,
+          supplierId: parseInt(id),
+        },
       },
     });
+
+    if (!linkedSupplier) {
+      return createErrorResponse(res, 403, MessageEnum.SUPPLIER_NOT_FOUND);
+    }
+
+    const supplier = await prisma.supplier.findUnique({
+      where: {
+        id: parseInt(id)
+      },
+    });
+
     if (!supplier) {
       return createErrorResponse(res, 403, MessageEnum.SUPPLIER_NOT_FOUND);
     }
 
-    // Save the user with the hashed password using Prisma
     await prisma.supplier.update({
       where: {
         id: parseInt(id)
@@ -296,6 +313,7 @@ export async function editSupplier(req, res) {
         company_description: company_description ? company_description : supplier.company_description,
         city: city ? city : supplier.city,
         phone_no: phone_no ? phone_no : supplier.phone_no,
+        role: role !== undefined ? role : supplier.role,
       },
     });
 
@@ -369,6 +387,7 @@ export async function getAllSuppliers(req, res) {
         company_name: supplier.company_name,
         email: supplier.email,
         phone_no: supplier.phone_no,
+        role: supplier.role,
         company_logo: supplier.company_logo ? `${baseurl}/profile/${supplier.company_logo}` : null,
         status: supplier.status,
         total_tasks: totalTasks,
@@ -438,6 +457,7 @@ export async function getSupplierById(req, res) {
       last_name: supplier.last_name,
       email: supplier.email,
       phone_no: supplier.phone_no,
+      role: supplier.role,
       company_name: supplier.company_name,
       company_description: supplier.company_description,
       city: supplier.city,
@@ -796,14 +816,15 @@ export const createJobServiceSheet = async (req, res) => {
     cdsSignature,
     materials,
     partsUsed,
+    boatParts,
+    installedDate,
+    warrantyStartDate,
   } = req.body;
-
-  const normalizedFurtherActionRequired =
-    furtherActionRequired ?? further_action_required;
 
   const parseArrayField = (value) => {
     if (!value) return [];
     if (Array.isArray(value)) return value;
+
     if (typeof value === "string") {
       try {
         const parsedValue = JSON.parse(value);
@@ -812,45 +833,107 @@ export const createJobServiceSheet = async (req, res) => {
         return [];
       }
     }
+
     return [];
   };
 
+  const calculateWarrantyEndDate = (startDate, duration, type) => {
+    if (!startDate || !duration || !type) return null;
+
+    const warrantyEndDate = new Date(startDate);
+
+    switch (String(type).toUpperCase()) {
+      case "DAYS":
+        warrantyEndDate.setDate(
+          warrantyEndDate.getDate() + parseInt(duration, 10)
+        );
+        break;
+      case "MONTHS":
+        warrantyEndDate.setMonth(
+          warrantyEndDate.getMonth() + parseInt(duration, 10)
+        );
+        break;
+      case "YEARS":
+        warrantyEndDate.setFullYear(
+          warrantyEndDate.getFullYear() + parseInt(duration, 10)
+        );
+        break;
+      default:
+        return null;
+    }
+
+    return warrantyEndDate;
+  };
+
+  const getWarrantyStatus = (warrantyEndDate) => {
+    if (!warrantyEndDate) return "ACTIVE";
+
+    const today = new Date();
+    const endDate = new Date(warrantyEndDate);
+    const diffDays = Math.ceil((endDate - today) / (1000 * 60 * 60 * 24));
+
+    if (diffDays < 0) return "EXPIRED";
+    if (diffDays <= 30) return "EXPIRING_SOON";
+    return "ACTIVE";
+  };
+
+  const normalizedFurtherActionRequired =
+    furtherActionRequired ?? further_action_required;
   const normalizedMaterialsInput = parseArrayField(materials);
   const normalizedPartsUsedInput = parseArrayField(partsUsed);
+  const normalizedBoatPartsInput = parseArrayField(boatParts);
 
   const schema = Joi.object({
     taskId: Joi.number().integer().required(),
     date: Joi.date().required(),
-    jobNumber: Joi.string().optional(),
+    jobNumber: Joi.string().optional().allow(""),
     personAttending: Joi.string().required(),
     customerName: Joi.string().required(),
-    mobile: Joi.string().optional(),
-    workToBeCarriedOut: Joi.string().optional(),
-    workCarriedOut: Joi.string().optional(),
+    mobile: Joi.string().optional().allow(""),
+    workToBeCarriedOut: Joi.string().optional().allow(""),
+    workCarriedOut: Joi.string().optional().allow(""),
     furtherActionRequired: Joi.string().optional().allow(""),
     further_action_required: Joi.string().optional().allow(""),
-    cdsSignature: Joi.string().optional(),
+    cdsSignature: Joi.string().optional().allow(""),
+    installedDate: Joi.date().optional(),
+    warrantyStartDate: Joi.date().optional(),
     materials: Joi.alternatives().try(
-      Joi.array().items(Joi.object({
-        materialName: Joi.string().required(),
-        unitsUsed: Joi.number().required(),
-        pricePerUnit: Joi.number().optional(),
-        totalPrice: Joi.number().required()
-      })),
+      Joi.array().items(
+        Joi.object({
+          materialName: Joi.string().required(),
+          unitsUsed: Joi.number().required(),
+          pricePerUnit: Joi.number().optional(),
+          totalPrice: Joi.number().optional(),
+        })
+      ),
       Joi.string()
     ).optional(),
     partsUsed: Joi.alternatives().try(
-      Joi.array().items(Joi.object({
-        id: Joi.number().integer().optional(),
-        partId: Joi.number().integer().optional(),
-        materialName: Joi.string().optional(),
-        name: Joi.string().optional(),
-        partName: Joi.string().optional(),
-        unitsUsed: Joi.number().optional(),
-        quantity: Joi.number().optional(),
-        pricePerUnit: Joi.number().optional(),
-        totalPrice: Joi.number().optional()
-      })),
+      Joi.array().items(
+        Joi.object({
+          id: Joi.number().integer().optional(),
+          partId: Joi.number().integer().optional(),
+          materialName: Joi.string().optional(),
+          name: Joi.string().optional(),
+          partName: Joi.string().optional(),
+          unitsUsed: Joi.number().optional(),
+          quantity: Joi.number().optional(),
+          pricePerUnit: Joi.number().optional(),
+          totalPrice: Joi.number().optional(),
+        })
+      ),
+      Joi.string()
+    ).optional(),
+    boatParts: Joi.alternatives().try(
+      Joi.array().items(
+        Joi.object({
+          id: Joi.number().integer().optional(),
+          partId: Joi.number().integer().optional(),
+          installedDate: Joi.date().optional(),
+          warrantyStartDate: Joi.date().optional(),
+          notes: Joi.string().optional().allow(""),
+        })
+      ),
       Joi.string()
     ).optional(),
   });
@@ -859,13 +942,14 @@ export const createJobServiceSheet = async (req, res) => {
     ...req.body,
     materials: normalizedMaterialsInput,
     partsUsed: normalizedPartsUsedInput,
+    boatParts: normalizedBoatPartsInput,
   };
 
   const { error } = schema.validate(payloadToValidate);
   if (error) {
     const message = error.details.map((i) => i.message).join(", ");
     return res.status(400).json({
-      message: message,
+      message,
       missingParams: error.details[0].message,
       status: 400,
       success: false,
@@ -883,11 +967,11 @@ export const createJobServiceSheet = async (req, res) => {
       include: {
         JobServiceSheet: {
           include: {
-            Material: true
-          }
+            Material: true,
+          },
         },
-        user: true
-      }
+        user: true,
+      },
     });
 
     if (!task) {
@@ -907,26 +991,114 @@ export const createJobServiceSheet = async (req, res) => {
     if (pendingExtraPartRequests.length > 0) {
       return res.status(200).json({
         success: false,
-        message: "Extra parts request is still pending from user side. Please wait until all requested parts are added before updating the CDS Job Sheet.",
+        message:
+          "Extra parts request is still pending from user side. Please wait until all requested parts are added before updating the CDS Job Sheet.",
         status: 200,
         data: {},
       });
     }
 
+    const fulfilledExtraPartRequests = existingExtraPartRequests.filter(
+      (request) => request.status === "FULFILLED"
+    );
+    const incompleteFulfilledRequests = fulfilledExtraPartRequests.filter(
+      (request) => !request.addedPart
+    );
+
+    if (incompleteFulfilledRequests.length > 0) {
+      return res.status(200).json({
+        success: false,
+        message:
+          "Requested part is marked fulfilled but was not added to inventory. Please add it from user side before updating the CDS Job Sheet.",
+        status: 200,
+        data: {
+          extraPartRequests: incompleteFulfilledRequests.map((request) => ({
+            id: request.id,
+            partName: request.partName,
+            status: request.status,
+          })),
+        },
+      });
+    }
+
+    const fulfilledPartsUsed = fulfilledExtraPartRequests.map((request) => {
+      const pricePerUnit =
+        request.attachedMaterial?.pricePerUnit ??
+        request.addedPart.boat_owner_cost ??
+        request.addedPart.original_cost ??
+        0;
+      const unitsUsed = Number(request.unitsUsed || 0);
+      const totalPrice =
+        request.attachedMaterial?.totalPrice ?? unitsUsed * Number(pricePerUnit || 0);
+
+      return {
+        extraPartRequestId: request.id,
+        partId: request.addedPart.id,
+        materialName: request.addedPart.name || request.partName,
+        name: request.addedPart.name || request.partName,
+        unitsUsed,
+        pricePerUnit: Number(pricePerUnit || 0),
+        totalPrice: Number(totalPrice || 0),
+        source: "REQUEST_FULFILLED",
+      };
+    });
+
     const selectedPartIds = normalizedPartsUsedInput
-      .map((part) => parseInt(part.partId ?? part.id))
+      .map((part) => parseInt(part.partId ?? part.id, 10))
       .filter((partId) => !Number.isNaN(partId));
 
-    const inventoryParts = selectedPartIds.length > 0
-      ? await prisma.partInventory.findMany({
-        where: {
-          userId: task.userId,
-          id: {
-            in: selectedPartIds
-          }
-        }
-      })
-      : [];
+    const requiredDatePartIds = [
+      ...new Set([
+        ...selectedPartIds,
+        ...fulfilledPartsUsed.map((part) => part.partId),
+      ]),
+    ];
+    const boatPartDateMap = new Map(
+      normalizedBoatPartsInput
+        .map((boatPart) => ({
+          partId: parseInt(boatPart.partId ?? boatPart.id, 10),
+          boatPart,
+        }))
+        .filter(({ partId }) => !Number.isNaN(partId))
+        .map(({ partId, boatPart }) => [partId, boatPart])
+    );
+    const missingDateParts = requiredDatePartIds.filter((partId) => {
+      const boatPart = boatPartDateMap.get(partId);
+      return !(
+        (boatPart?.installedDate || installedDate) &&
+        (boatPart?.warrantyStartDate || warrantyStartDate)
+      );
+    });
+
+    if (missingDateParts.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "installedDate and warrantyStartDate are required for every selected or fulfilled requested part.",
+        status: 400,
+        data: {
+          missingPartIds: missingDateParts,
+        },
+      });
+    }
+
+    const inventoryParts =
+      selectedPartIds.length > 0
+        ? await prisma.partInventory.findMany({
+            where: {
+              userId: task.userId,
+              id: {
+                in: selectedPartIds,
+              },
+            },
+            select: {
+              id: true,
+              name: true,
+              original_cost: true,
+              boat_owner_cost: true,
+            },
+          })
+        : [];
 
     const inventoryPartMap = new Map(
       inventoryParts.map((part) => [part.id, part])
@@ -953,12 +1125,12 @@ export const createJobServiceSheet = async (req, res) => {
         materialName: material.materialName,
         unitsUsed,
         pricePerUnit,
-        totalPrice
+        totalPrice,
       });
     });
 
     normalizedPartsUsedInput.forEach((part) => {
-      const partId = parseInt(part.partId ?? part.id);
+      const partId = parseInt(part.partId ?? part.id, 10);
       const inventoryPart = inventoryPartMap.get(partId);
       const materialName =
         inventoryPart?.name ||
@@ -988,7 +1160,18 @@ export const createJobServiceSheet = async (req, res) => {
         materialName,
         unitsUsed,
         pricePerUnit,
-        totalPrice
+        totalPrice,
+      });
+    });
+
+    fulfilledPartsUsed.forEach((part) => {
+      if (selectedPartIds.includes(part.partId)) return;
+
+      materialRows.push({
+        materialName: part.materialName,
+        unitsUsed: part.unitsUsed,
+        pricePerUnit: part.pricePerUnit,
+        totalPrice: part.totalPrice,
       });
     });
 
@@ -1012,19 +1195,19 @@ export const createJobServiceSheet = async (req, res) => {
     if (jobServiceSheet) {
       jobServiceSheet = await prisma.jobServiceSheet.update({
         where: {
-          id: jobServiceSheet.id
+          id: jobServiceSheet.id,
         },
-        data: jobSheetPayload
+        data: jobSheetPayload,
       });
 
       await prisma.material.deleteMany({
         where: {
-          jobServiceSheetId: jobServiceSheet.id
-        }
+          jobServiceSheetId: jobServiceSheet.id,
+        },
       });
     } else {
       jobServiceSheet = await prisma.jobServiceSheet.create({
-        data: jobSheetPayload
+        data: jobSheetPayload,
       });
     }
 
@@ -1040,6 +1223,65 @@ export const createJobServiceSheet = async (req, res) => {
       });
     }
 
+    const installedBoatParts = [];
+
+    for (const boatPart of normalizedBoatPartsInput) {
+      const partId = parseInt(boatPart.partId ?? boatPart.id, 10);
+
+      if (Number.isNaN(partId)) {
+        continue;
+      }
+
+      const partRows = await mysqlQuery(
+        "SELECT * FROM `PartInventory` WHERE id = ? AND userId = ? LIMIT 1",
+        [partId, task.userId]
+      );
+
+      if (!partRows[0]) {
+        continue;
+      }
+
+      const installedDateValue = boatPart.installedDate || installedDate || null;
+      const warrantyStartDateValue =
+        boatPart.warrantyStartDate ||
+        warrantyStartDate ||
+        installedDateValue ||
+        null;
+
+      const warrantyEndDate = calculateWarrantyEndDate(
+        warrantyStartDateValue,
+        partRows[0].warranty_duration,
+        partRows[0].warranty_type
+      );
+
+      const status = getWarrantyStatus(warrantyEndDate);
+
+      await mysqlQuery(
+        `INSERT INTO \`BoatPart\`
+          (boatId, partId, installedDate, warrantyStartDate, warrantyEndDate, status, notes, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          task.boatId,
+          partId,
+          installedDateValue ? new Date(installedDateValue) : null,
+          warrantyStartDateValue ? new Date(warrantyStartDateValue) : null,
+          warrantyEndDate,
+          status,
+          boatPart.notes || null,
+        ]
+      );
+
+      installedBoatParts.push({
+        partId,
+        boatId: task.boatId,
+        installedDate: installedDateValue,
+        warrantyStartDate: warrantyStartDateValue,
+        warrantyEndDate,
+        status,
+        notes: boatPart.notes || null,
+      });
+    }
+
     await prisma.task.update({
       where: {
         id: parseInt(taskId),
@@ -1052,9 +1294,20 @@ export const createJobServiceSheet = async (req, res) => {
     const responseData = {
       ...jobServiceSheet,
       materials: materialRows,
+      partsUsed: [
+        ...normalizedPartsUsedInput,
+        ...fulfilledPartsUsed.filter((part) => !selectedPartIds.includes(part.partId)),
+      ],
+      boatParts: installedBoatParts,
     };
 
-    return createSuccessResponse(res, 200, true, MessageEnum.JOB_SERVICE_SHEET, responseData);
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      MessageEnum.JOB_SERVICE_SHEET,
+      responseData
+    );
   } catch (error) {
     console.error(error);
     return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
@@ -1393,7 +1646,8 @@ export async function completeProfile(req, res) {
       phone_no,
       service_region,
       services_offered,
-      abn
+      abn,
+      role
     } = req.body;
     const schema = Joi.object({
       company_name: Joi.string().optional(),
@@ -1405,7 +1659,7 @@ export async function completeProfile(req, res) {
       abn: Joi.string().optional().allow(''),
       first_name: Joi.string().max(255).required(),
       last_name: Joi.string().max(255).required(),
-
+      role: Joi.string().optional().allow(''),
     });
 
     const result = schema.validate(req.body);
@@ -1442,6 +1696,7 @@ export async function completeProfile(req, res) {
       phone_no: phone_no || req.user.phone_no,
       services_offered: services_offered !== null && services_offered !== undefined ? services_offered : req.user.services_offered,
       abn: abn !== null && abn !== undefined ? abn : req.user.abn,
+      role: role !== null && role !== undefined ? role : req.user.role,
       complete_profile_status: 1
     };
 
@@ -1496,7 +1751,8 @@ export async function editProfile(req, res) {
       phone_no,
       service_region,
       services_offered,
-      abn
+      abn,
+      role
     } = req.body;
     const schema = Joi.object({
       company_name: Joi.string().optional(),
@@ -1508,7 +1764,7 @@ export async function editProfile(req, res) {
       abn: Joi.string().optional().allow(''),
       first_name: Joi.string().max(255).required(),
       last_name: Joi.string().max(255).required(),
-
+      role: Joi.string().optional().allow(''),
     });
 
     const result = schema.validate(req.body);
@@ -1545,6 +1801,7 @@ export async function editProfile(req, res) {
       phone_no: phone_no || req.user.phone_no,
       services_offered: services_offered !== null && services_offered !== undefined ? services_offered : req.user.services_offered,
       abn: abn !== null && abn !== undefined ? abn : req.user.abn,
+      role: role !== null && role !== undefined ? role : req.user.role,
     };
 
     await prisma.supplier.update({

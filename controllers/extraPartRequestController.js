@@ -298,13 +298,6 @@ export async function createStaffExtraPartRequest(req, res) {
 export async function getUserExtraPartRequests(req, res) {
   try {
     await ensureExtraPartRequestTable();
-
-    // const status = req.query.status ? String(req.query.status).toUpperCase() : "PENDING";
-    // const params = [req.user.id];
-    // const statusClause = "AND e.status = ?";
-    // params.push(status);
-
-    // AFTER
     const validStatuses = ["PENDING", "FULFILLED"];
     const requestedStatus = req.query.status ? String(req.query.status).toUpperCase() : "PENDING";
     const status = validStatuses.includes(requestedStatus) ? requestedStatus : "PENDING";
@@ -524,16 +517,34 @@ export async function fulfillExtraPartRequest(req, res) {
     totalPrice,
   } = req.body;
 
+  // const schema = Joi.object({
+  //   requestId: Joi.number().integer().required(),
+  //   original_cost: Joi.number().required(),
+  //   boat_owner_cost: Joi.number().required(),
+  //   stock_quantity: Joi.number().required(),
+  //   low_stock_alert: Joi.number().optional(),
+  //   pricePerUnit: Joi.number().optional(),
+  //   totalPrice: Joi.number().optional(),
+  // });
   const schema = Joi.object({
     requestId: Joi.number().integer().required(),
     original_cost: Joi.number().required(),
     boat_owner_cost: Joi.number().required(),
     stock_quantity: Joi.number().required(),
     low_stock_alert: Joi.number().optional(),
+
     pricePerUnit: Joi.number().optional(),
     totalPrice: Joi.number().optional(),
-  });
 
+    warranty_duration: Joi.number().optional(),
+    warranty_type: Joi.string()
+      .valid("DAYS", "MONTHS", "YEARS")
+      .optional(),
+
+    part_number: Joi.string().optional().allow(""),
+    manufacturer: Joi.string().optional().allow(""),
+    serial_number: Joi.string().optional().allow("")
+  });
   const { error } = schema.validate(req.body);
 
   if (error) {
@@ -567,15 +578,35 @@ export async function fulfillExtraPartRequest(req, res) {
       const materialTotal = Number(totalPrice ?? request.unitsUsed * partCost);
 
       const [partResult] = await connection.execute(
-        `INSERT INTO \`PartInventory\`
-          (name, original_cost, boat_owner_cost, stock_quantity, low_stock_alert, userId, createdAt, updatedAt)
-          VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        `INSERT INTO PartInventory
+  (
+    name,
+    original_cost,
+    boat_owner_cost,
+    stock_quantity,
+    low_stock_alert,
+    warranty_duration,
+    warranty_type,
+    part_number,
+    manufacturer,
+    serial_number,
+    userId,
+    createdAt,
+    updatedAt
+  )
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
         [
           partName,
           Number(original_cost),
           Number(boat_owner_cost),
           Number(stock_quantity),
           Number(low_stock_alert ?? 10),
+          req.body.warranty_duration ?? null,
+          req.body.warranty_type ?? null,
+          req.body.part_number ?? null,
+          req.body.manufacturer ?? null,
+          req.body.serial_number ?? null,
+
           req.user.id,
         ]
       );

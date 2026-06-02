@@ -16,7 +16,7 @@ const prisma = new PrismaClient();
  * DO NOT commit live keys to a public repo.
  */
 const stripeCurrent = new Stripe(
-    "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",
+    process.env.STRIPE_SECRET_KEY,
     { apiVersion: "2022-11-15" }
 );
 
@@ -25,7 +25,7 @@ const stripeCurrent = new Stripe(
 let stripeOther = null;
 // Example to enable probing (ONLY for local testing, replace the placeholder):
 // try {
-//   stripeOther = new Stripe("sk_live_REPLACE_WITH_YOUR_LIVE_KEY", { apiVersion: "2022-11-15" });
+//   stripeOther = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2022-11-15" });
 // } catch (e) {
 //   console.warn("stripeOther init failed, keeping as null:", e?.message || e);
 // }

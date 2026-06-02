@@ -79,10 +79,10 @@ userRouter.get(
 userRouter.post(
   '/parts',
   auth,
-  profileupload.fields([
-    { name: 'part_image',        maxCount: 1 },
-    { name: 'warranty_document', maxCount: 1 },
-  ]),
+//   profileupload.fields([
+//     { name: 'part_image',        maxCount: 1 },
+//     { name: 'warranty_document', maxCount: 1 },
+//   ]),
   createPart
 );
 
@@ -101,10 +101,6 @@ userRouter.get(
 userRouter.put(
   '/parts/:id',
   auth,
-  profileupload.fields([
-    { name: 'part_image',        maxCount: 1 },
-    { name: 'warranty_document', maxCount: 1 },
-  ]),
   updatePart
 );
 

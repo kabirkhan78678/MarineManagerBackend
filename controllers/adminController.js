@@ -21,7 +21,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ADMIN_BLOCKED_MARKER = "ADMIN_BLOCKED::";
 const stripe = new Stripe(
-  "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",
+  process.env.STRIPE_SECRET_KEY,
   { apiVersion: "2022-11-15" }
 );
 
@@ -819,8 +819,8 @@ async function getGlobalUserCounts() {
       "Total User",
       totalUser,
       buildDashboardComparison(totalUserTodayGrowth, totalUserYesterdayGrowth, {
-        upLabel: "Up for yesterday",
-        downLabel: "Down for yesterday",
+        upLabel: "Up form yesterday",
+        downLabel: "Down form yesterday",
       }),
     ),
     buildDashboardCard(
@@ -828,8 +828,8 @@ async function getGlobalUserCounts() {
       "Total Client",
       totalClient,
       buildDashboardComparison(totalClientTodayGrowth, totalClientYesterdayGrowth, {
-        upLabel: "Up for yesterday",
-        downLabel: "Down for yesterday",
+        upLabel: "Up form yesterday",
+        downLabel: "Down form yesterday",
       }),
     ),
     buildDashboardCard(
@@ -837,8 +837,8 @@ async function getGlobalUserCounts() {
       "Total Technician",
       totalTechnician,
       buildDashboardComparison(totalTechnicianTodayGrowth, totalTechnicianYesterdayGrowth, {
-        upLabel: "Up for yesterday",
-        downLabel: "Down for yesterday",
+        upLabel: "Up form yesterday",
+        downLabel: "Down form yesterday",
       }),
     ),
     buildDashboardCard(
@@ -846,8 +846,8 @@ async function getGlobalUserCounts() {
       "Total Supplier",
       totalSupplier,
       buildDashboardComparison(totalSupplierTodayGrowth, totalSupplierYesterdayGrowth, {
-        upLabel: "Up for yesterday",
-        downLabel: "Down for yesterday",
+        upLabel: "Up form yesterday",
+        downLabel: "Down form yesterday",
       }),
     ),
   ];
@@ -2495,6 +2495,7 @@ export async function createManagedUser(req, res) {
           about_us,
           service_region,
           services_offered,
+          ...(role !== undefined && { role }),
           ...(complete_profile_status !== undefined && { complete_profile_status }),
           ...(status !== undefined && { status }),
         },
@@ -4168,6 +4169,7 @@ export async function inviteManagedUser(req, res) {
           about_us,
           service_region,
           services_offered,
+          ...(role !== undefined && { role }),
           ...(complete_profile_status !== undefined && { complete_profile_status }),
         },
         select: getManagedUserSelect(type),
@@ -5044,8 +5046,8 @@ export async function getDashboard(req, res) {
         "Total User",
         totalUsers,
         buildDashboardComparison(usersCreatedToday, usersCreatedYesterday, {
-          upLabel: "Up for yesterday",
-          downLabel: "Down for yesterday",
+          upLabel: "Up form yesterday",
+          downLabel: "Down form yesterday",
         }),
       ),
       buildDashboardCard(
@@ -5053,8 +5055,8 @@ export async function getDashboard(req, res) {
         "Total Boats",
         totalBoats,
         buildDashboardComparison(boatsCreatedToday, boatsCreatedYesterday, {
-          upLabel: "Up for yesterday",
-          downLabel: "Down for yesterday",
+          upLabel: "Up form yesterday",
+          downLabel: "Down form yesterday",
         }),
       ),
       buildDashboardCard(
@@ -5062,8 +5064,8 @@ export async function getDashboard(req, res) {
         "Total Docks",
         totalDocks,
         buildDashboardComparison(docksCreatedToday, docksCreatedYesterday, {
-          upLabel: "Up for yesterday",
-          downLabel: "Down for yesterday",
+          upLabel: "Up form yesterday",
+          downLabel: "Down form yesterday",
         }),
       ),
       buildDashboardCard(
@@ -5072,8 +5074,8 @@ export async function getDashboard(req, res) {
         totalRevenue,
         buildDashboardComparison(revenueCreatedToday, revenueCreatedYesterday, {
           decimals: 2,
-          upLabel: "Up for yesterday",
-          downLabel: "Down for yesterday",
+          upLabel: "Up form yesterday",
+          downLabel: "Down form yesterday",
         }),
         { decimals: 2 },
       ),

@@ -12,6 +12,7 @@ import { findTrailOrSubscription, getDateRanges, randomStringAsBase64Url } from 
 import { MessageEnum } from '../config/message.js';
 import { createErrorResponse, createSuccessResponse } from '../utils/responseUtil.js';
 import { createNotification, sendNotificationRelateToTask } from '../utils/notification.js';
+import { mysqlQuery } from '../utils/mysqlDb.js';
 import {
   getAvailablePartsForTaskUser,
   getExtraPartRequestsForTask
@@ -2285,7 +2286,7 @@ export const completeTask = async (req, res) => {
   }
 };
 
-export const createJobServiceSheet = async (req, res) => {
+{/* export const createJobServiceSheet = async (req, res) => {
   const {
     taskId,
     date,
@@ -2295,16 +2296,13 @@ export const createJobServiceSheet = async (req, res) => {
     mobile,
     workToBeCarriedOut,
     workCarriedOut,
-    furtherActionRequired,
-    further_action_required,
     cdsSignature,
     materials,
     partsUsed,
-
+    boatParts,
+    installedDate,
+    warrantyStartDate,
   } = req.body;
-
-  const normalizedFurtherActionRequired =
-    furtherActionRequired ?? further_action_required;
 
   const parseArrayField = (value) => {
     if (!value) {
@@ -2327,30 +2325,70 @@ export const createJobServiceSheet = async (req, res) => {
     return [];
   };
 
-  const normalizedMaterialsInput =
-    parseArrayField(materials);
+  const calculateWarrantyEndDate = (startDate, duration, type) => {
+    if (!startDate || !duration || !type) return null;
 
-  const normalizedPartsUsedInput =
-    parseArrayField(partsUsed);
+    const warrantyEndDate = new Date(startDate);
+
+    switch (String(type).toUpperCase()) {
+      case "DAYS":
+        warrantyEndDate.setDate(
+          warrantyEndDate.getDate() + parseInt(duration, 10)
+        );
+        break;
+      case "MONTHS":
+        warrantyEndDate.setMonth(
+          warrantyEndDate.getMonth() + parseInt(duration, 10)
+        );
+        break;
+      case "YEARS":
+        warrantyEndDate.setFullYear(
+          warrantyEndDate.getFullYear() + parseInt(duration, 10)
+        );
+        break;
+      default:
+        return null;
+    }
+
+    return warrantyEndDate;
+  };
+
+  const getWarrantyStatus = (warrantyEndDate) => {
+    if (!warrantyEndDate) return "ACTIVE";
+
+    const today = new Date();
+    const endDate = new Date(warrantyEndDate);
+    const diffDays = Math.ceil((endDate - today) / (1000 * 60 * 60 * 24));
+
+    if (diffDays < 0) return "EXPIRED";
+    if (diffDays <= 30) return "EXPIRING_SOON";
+    return "ACTIVE";
+  };
+
+  const normalizedFurtherActionRequired =
+    furtherActionRequired ?? further_action_required;
+  const normalizedMaterialsInput = parseArrayField(materials);
+  const normalizedPartsUsedInput = parseArrayField(partsUsed);
+  const normalizedBoatPartsInput = parseArrayField(boatParts);
 
   const schema = Joi.object({
     taskId: Joi.number().integer().required(),
     date: Joi.date().required(),
-    jobNumber: Joi.string().optional(),
+    jobNumber: Joi.string().optional().allow(""),
     personAttending: Joi.string().required(),
     customerName: Joi.string().required(),
-    mobile: Joi.string().optional(),
-    workToBeCarriedOut: Joi.string().optional(),
-    workCarriedOut: Joi.string().optional(),
-    furtherActionRequired: Joi.string().optional().allow(""),
-    further_action_required: Joi.string().optional().allow(""),
-    cdsSignature: Joi.string().optional(),
+    mobile: Joi.string().optional().allow(""),
+    workToBeCarriedOut: Joi.string().optional().allow(""),
+    workCarriedOut: Joi.string().optional().allow(""),
+    cdsSignature: Joi.string().optional().allow(""),
+    installedDate: Joi.date().optional(),
+    warrantyStartDate: Joi.date().optional(),
     materials: Joi.alternatives().try(
       Joi.array().items(Joi.object({
         materialName: Joi.string().required(),
         unitsUsed: Joi.number().required(),
         pricePerUnit: Joi.number().optional(),
-        totalPrice: Joi.number().required()
+        totalPrice: Joi.number().optional()
       })),
       Joi.string()
     ).optional(),
@@ -2368,6 +2406,16 @@ export const createJobServiceSheet = async (req, res) => {
       })),
       Joi.string()
     ).optional(),
+    boatParts: Joi.alternatives().try(
+      Joi.array().items(Joi.object({
+        id: Joi.number().integer().optional(),
+        partId: Joi.number().integer().optional(),
+        installedDate: Joi.date().optional(),
+        warrantyStartDate: Joi.date().optional(),
+        notes: Joi.string().optional().allow(""),
+      })),
+      Joi.string()
+    ).optional(),
   });
 
 
@@ -2375,6 +2423,7 @@ export const createJobServiceSheet = async (req, res) => {
     ...req.body,
     materials: normalizedMaterialsInput,
     partsUsed: normalizedPartsUsedInput,
+    boatParts: normalizedBoatPartsInput,
   };
 
   const { error } = schema.validate(payloadToValidate);
@@ -2583,6 +2632,68 @@ export const createJobServiceSheet = async (req, res) => {
       });
     }
 
+    const installedBoatParts = [];
+
+    for (const boatPart of normalizedBoatPartsInput) {
+      const partId =
+        parseInt(boatPart.partId ?? boatPart.id, 10);
+
+      if (Number.isNaN(partId)) {
+        continue;
+      }
+
+      const partRows = await mysqlQuery(
+        "SELECT * FROM `PartInventory` WHERE id = ? AND userId = ? LIMIT 1",
+        [partId, task.userId]
+      );
+
+      if (!partRows[0]) {
+        continue;
+      }
+
+      const installedDateValue =
+        boatPart.installedDate || installedDate || null;
+
+      const warrantyStartDateValue =
+        boatPart.warrantyStartDate ||
+        warrantyStartDate ||
+        installedDateValue ||
+        null;
+
+      const warrantyEndDate = calculateWarrantyEndDate(
+        warrantyStartDateValue,
+        partRows[0].warranty_duration,
+        partRows[0].warranty_type
+      );
+
+      const status = getWarrantyStatus(warrantyEndDate);
+
+      await mysqlQuery(
+        `INSERT INTO \`BoatPart\`
+          (boatId, partId, installedDate, warrantyStartDate, warrantyEndDate, status, notes, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          task.boatId,
+          partId,
+          installedDateValue ? new Date(installedDateValue) : null,
+          warrantyStartDateValue ? new Date(warrantyStartDateValue) : null,
+          warrantyEndDate,
+          status,
+          boatPart.notes || null,
+        ]
+      );
+
+      installedBoatParts.push({
+        partId,
+        boatId: task.boatId,
+        installedDate: installedDateValue,
+        warrantyStartDate: warrantyStartDateValue,
+        warrantyEndDate,
+        status,
+        notes: boatPart.notes || null,
+      });
+    }
+
     await prisma.task.update({
       where: {
         id: parseInt(taskId)
@@ -2595,12 +2706,530 @@ export const createJobServiceSheet = async (req, res) => {
     const responseData = {
       ...jobServiceSheet,
       materials: materialRows,
+      boatParts: installedBoatParts,
     };
 
     return createSuccessResponse(res, 200, true, MessageEnum.JOB_SERVICE_SHEET, responseData);
   } catch (error) {
     console.error(error);
     return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
+  }
+}; */}
+
+export const createJobServiceSheet = async (req, res) => {
+  const {
+    taskId,
+    date,
+    jobNumber,
+    personAttending,
+    customerName,
+    mobile,
+    workToBeCarriedOut,
+    workCarriedOut,
+    cdsSignature,
+    materials,
+    partsUsed,
+    boatParts,
+    installedDate,
+    warrantyStartDate,
+  } = req.body;
+
+  const parseArrayField = (value) => {
+    if (!value) return [];
+    if (Array.isArray(value)) return value;
+    if (typeof value === "string") {
+      try {
+        const parsedValue = JSON.parse(value);
+        return Array.isArray(parsedValue) ? parsedValue : [];
+      } catch (parseError) {
+        return [];
+      }
+    }
+    return [];
+  };
+
+  const calculateWarrantyEndDate = (startDate, duration, type) => {
+    if (!startDate || !duration || !type) return null;
+    const warrantyEndDate = new Date(startDate);
+    switch (String(type).toUpperCase()) {
+      case "DAYS":
+        warrantyEndDate.setDate(warrantyEndDate.getDate() + parseInt(duration, 10));
+        break;
+      case "MONTHS":
+        warrantyEndDate.setMonth(warrantyEndDate.getMonth() + parseInt(duration, 10));
+        break;
+      case "YEARS":
+        warrantyEndDate.setFullYear(warrantyEndDate.getFullYear() + parseInt(duration, 10));
+        break;
+      default:
+        return null;
+    }
+    return warrantyEndDate;
+  };
+
+  const getWarrantyStatus = (warrantyEndDate) => {
+    if (!warrantyEndDate) return "ACTIVE";
+    const today = new Date();
+    const endDate = new Date(warrantyEndDate);
+    const diffDays = Math.ceil((endDate - today) / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) return "EXPIRED";
+    if (diffDays <= 30) return "EXPIRING_SOON";
+    return "ACTIVE";
+  };
+
+  const normalizedMaterialsInput = parseArrayField(materials);
+  const normalizedPartsUsedInput = parseArrayField(partsUsed);
+  const normalizedBoatPartsInput = parseArrayField(boatParts);
+
+  const schema = Joi.object({
+    taskId:            Joi.number().integer().required(),
+    date:              Joi.date().required(),
+    jobNumber:         Joi.string().optional().allow(""),
+    personAttending:   Joi.string().required(),
+    customerName:      Joi.string().required(),
+    mobile:            Joi.string().optional().allow(""),
+    workToBeCarriedOut: Joi.string().optional().allow(""),
+    workCarriedOut:    Joi.string().optional().allow(""),
+    cdsSignature:      Joi.string().optional().allow(""),
+    installedDate:     Joi.date().optional(),
+    warrantyStartDate: Joi.date().optional(),
+    materials: Joi.alternatives().try(
+      Joi.array().items(Joi.object({
+        materialName: Joi.string().required(),
+        unitsUsed:    Joi.number().required(),
+        pricePerUnit: Joi.number().optional(),
+        totalPrice:   Joi.number().optional()
+      })),
+      Joi.string()
+    ).optional(),
+    partsUsed: Joi.alternatives().try(
+      Joi.array().items(Joi.object({
+        id:           Joi.number().integer().optional(),
+        partId:       Joi.number().integer().optional(),
+        materialName: Joi.string().optional(),
+        name:         Joi.string().optional(),
+        partName:     Joi.string().optional(),
+        unitsUsed:    Joi.number().optional(),
+        quantity:     Joi.number().optional(),
+        pricePerUnit: Joi.number().optional(),
+        totalPrice:   Joi.number().optional()
+      })),
+      Joi.string()
+    ).optional(),
+    boatParts: Joi.alternatives().try(
+      Joi.array().items(Joi.object({
+        id:               Joi.number().integer().optional(),
+        partId:           Joi.number().integer().optional(),
+        installedDate:    Joi.date().optional(),
+        warrantyStartDate: Joi.date().optional(),
+        notes:            Joi.string().optional().allow(""),
+      })),
+      Joi.string()
+    ).optional(),
+  });
+
+  const payloadToValidate = {
+    ...req.body,
+    materials: normalizedMaterialsInput,
+    partsUsed: normalizedPartsUsedInput,
+    boatParts: normalizedBoatPartsInput,
+  };
+
+  const { error } = schema.validate(payloadToValidate, { allowUnknown: true });
+  if (error) {
+    return res.status(400).json({
+      message: error.details[0].message,
+      missingParams: error.details[0].message,
+      status: 400,
+      success: false,
+    });
+  }
+
+  try {
+    // ✅ Staff task fetch
+    const task = await prisma.task.findFirst({
+      where: {
+        id: parseInt(taskId),
+        assignStaffId: req.user.id
+      },
+      include: {
+        JobServiceSheet: {
+          include: { Material: true }
+        },
+        user: true
+      }
+    });
+
+    if (!task) {
+      return createErrorResponse(res, 404, MessageEnum.TASK_NOT_FOUND);
+    }
+
+    // ✅ Extra part requests check
+    const existingExtraPartRequests = await getExtraPartRequestsForTask({
+      taskId: task.id,
+      requesterType: "STAFF",
+      requesterId: req.user.id,
+    });
+
+    const pendingExtraPartRequests = existingExtraPartRequests.filter(
+      (request) => request.status !== "FULFILLED"
+    );
+
+    if (pendingExtraPartRequests.length > 0) {
+      return res.status(200).json({
+        success: false,
+        message: "Extra parts request is still pending from user side. Please wait until all requested parts are added before updating the CDS Job Sheet.",
+        status: 200,
+        data: {},
+      });
+    }
+
+    // ✅ Inventory parts fetch
+    const fulfilledExtraPartRequests = existingExtraPartRequests.filter(
+      (request) => request.status === "FULFILLED"
+    );
+    const incompleteFulfilledRequests = fulfilledExtraPartRequests.filter(
+      (request) => !request.addedPart
+    );
+
+    if (incompleteFulfilledRequests.length > 0) {
+      return res.status(200).json({
+        success: false,
+        message: "Requested part is marked fulfilled but was not added to inventory. Please add it from user side before updating the CDS Job Sheet.",
+        status: 200,
+        data: {
+          extraPartRequests: incompleteFulfilledRequests.map((request) => ({
+            id: request.id,
+            partName: request.partName,
+            status: request.status,
+          })),
+        },
+      });
+    }
+
+    const fulfilledPartsUsed = fulfilledExtraPartRequests.map((request) => {
+      const pricePerUnit =
+        request.attachedMaterial?.pricePerUnit ??
+        request.addedPart.boat_owner_cost ??
+        request.addedPart.original_cost ??
+        0;
+      const unitsUsed = Number(request.unitsUsed || 0);
+      const totalPrice =
+        request.attachedMaterial?.totalPrice ?? unitsUsed * Number(pricePerUnit || 0);
+
+      return {
+        extraPartRequestId: request.id,
+        partId: request.addedPart.id,
+        materialName: request.addedPart.name || request.partName,
+        name: request.addedPart.name || request.partName,
+        unitsUsed,
+        pricePerUnit: Number(pricePerUnit || 0),
+        totalPrice: Number(totalPrice || 0),
+        source: "REQUEST_FULFILLED",
+      };
+    });
+
+    const selectedPartIds = normalizedPartsUsedInput
+      .map((part) => parseInt(part.partId ?? part.id))
+      .filter((partId) => !Number.isNaN(partId));
+
+    const requiredDatePartIds = [
+      ...new Set([
+        ...selectedPartIds,
+        ...fulfilledPartsUsed.map((part) => part.partId),
+      ]),
+    ];
+    const boatPartDateMap = new Map(
+      normalizedBoatPartsInput
+        .map((boatPart) => ({
+          partId: parseInt(boatPart.partId ?? boatPart.id, 10),
+          boatPart,
+        }))
+        .filter(({ partId }) => !Number.isNaN(partId))
+        .map(({ partId, boatPart }) => [partId, boatPart])
+    );
+    const getPartDateValues = (partId) => {
+      const boatPart = boatPartDateMap.get(partId);
+      return {
+        installedDate: boatPart?.installedDate || installedDate || null,
+        warrantyStartDate: boatPart?.warrantyStartDate || warrantyStartDate || null,
+      };
+    };
+    const getPartLabel = (partId) => {
+      const selectedPart = normalizedPartsUsedInput.find(
+        (part) => parseInt(part.partId ?? part.id, 10) === partId
+      );
+      const fulfilledPart = fulfilledPartsUsed.find((part) => part.partId === partId);
+      return (
+        selectedPart?.partName ||
+        selectedPart?.name ||
+        selectedPart?.materialName ||
+        fulfilledPart?.name ||
+        fulfilledPart?.materialName ||
+        `Part ${partId}`
+      );
+    };
+    const missingDateParts = requiredDatePartIds
+      .map((partId) => ({
+        partId,
+        partName: getPartLabel(partId),
+        ...getPartDateValues(partId),
+      }))
+      .filter((part) => !part.installedDate || !part.warrantyStartDate);
+
+    if (missingDateParts.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: missingDateParts
+          .map((part) => `Please add installedDate and warrantyStartDate for ${part.partName} (partId: ${part.partId}).`)
+          .join(" "),
+        status: 400,
+        data: {
+          missingParts: missingDateParts.map((part) => ({
+            partId: part.partId,
+            partName: part.partName,
+            missingFields: [
+              !part.installedDate ? "installedDate" : null,
+              !part.warrantyStartDate ? "warrantyStartDate" : null,
+            ].filter(Boolean),
+          })),
+        },
+      });
+    }
+
+    const responsePartsUsed = [
+      ...normalizedPartsUsedInput.map((part) => {
+        const partId = parseInt(part.partId ?? part.id, 10);
+        const partDates = getPartDateValues(partId);
+
+        return {
+          ...part,
+          partId,
+          installedDate: partDates.installedDate,
+          warrantyStartDate: partDates.warrantyStartDate,
+        };
+      }),
+      ...fulfilledPartsUsed
+        .filter((part) => !selectedPartIds.includes(part.partId))
+        .map((part) => ({
+          ...part,
+          ...getPartDateValues(part.partId),
+        })),
+    ];
+
+    const inventoryParts = selectedPartIds.length > 0
+      ? await prisma.partInventory.findMany({
+          where: {
+            userId: task.userId,
+            id: { in: selectedPartIds }
+          },
+          select: {
+            id: true,
+            name: true,
+            original_cost: true,
+            boat_owner_cost: true,
+          },
+        })
+      : [];
+
+    const inventoryPartMap = new Map(
+      inventoryParts.map((part) => [part.id, part])
+    );
+
+    // ✅ Material rows build
+    const materialRows = [];
+
+    normalizedMaterialsInput.forEach((material) => {
+      const unitsUsed = parseFloat(material.unitsUsed);
+      const pricePerUnit =
+        material.pricePerUnit !== undefined &&
+        material.pricePerUnit !== null &&
+        material.pricePerUnit !== ""
+          ? parseFloat(material.pricePerUnit)
+          : null;
+      const totalPrice =
+        material.totalPrice !== undefined &&
+        material.totalPrice !== null &&
+        material.totalPrice !== ""
+          ? parseFloat(material.totalPrice)
+          : (pricePerUnit || 0) * unitsUsed;
+
+      materialRows.push({
+        materialName: material.materialName,
+        unitsUsed,
+        pricePerUnit,
+        totalPrice
+      });
+    });
+
+    normalizedPartsUsedInput.forEach((part) => {
+      const partId       = parseInt(part.partId ?? part.id);
+      const inventoryPart = inventoryPartMap.get(partId);
+      const materialName =
+        inventoryPart?.name ||
+        part.materialName ||
+        part.name ||
+        part.partName;
+      const unitsUsed = parseFloat(part.unitsUsed ?? part.quantity ?? 0);
+
+      if (!materialName || Number.isNaN(unitsUsed) || unitsUsed <= 0) return;
+
+      const fallbackPricePerUnit =
+        inventoryPart?.boat_owner_cost ??
+        inventoryPart?.original_cost ??
+        0;
+
+      const pricePerUnit =
+        part.pricePerUnit !== undefined &&
+        part.pricePerUnit !== null &&
+        part.pricePerUnit !== ""
+          ? parseFloat(part.pricePerUnit)
+          : fallbackPricePerUnit;
+
+      const totalPrice =
+        part.totalPrice !== undefined &&
+        part.totalPrice !== null &&
+        part.totalPrice !== ""
+          ? parseFloat(part.totalPrice)
+          : unitsUsed * pricePerUnit;
+
+      materialRows.push({ materialName, unitsUsed, pricePerUnit, totalPrice });
+    });
+
+    // ✅ Job sheet create/update
+    fulfilledPartsUsed.forEach((part) => {
+      if (selectedPartIds.includes(part.partId)) return;
+
+      materialRows.push({
+        materialName: part.materialName,
+        unitsUsed: part.unitsUsed,
+        pricePerUnit: part.pricePerUnit,
+        totalPrice: part.totalPrice,
+      });
+    });
+
+    const jobSheetPayload = {
+      date:              new Date(date),
+      taskId:            parseInt(taskId),
+      boatId:            task.boatId,
+      userId:            task.userId,
+      staffId:           req.user.id,
+      jobNumber,
+      personAttending,
+      customerName,
+      mobile,
+      workToBeCarriedOut,
+      workCarriedOut,
+      cdsSignature,
+    };
+
+    let jobServiceSheet = task.JobServiceSheet[0] || null;
+
+    if (jobServiceSheet) {
+      jobServiceSheet = await prisma.jobServiceSheet.update({
+        where: { id: jobServiceSheet.id },
+        data: jobSheetPayload
+      });
+      await prisma.material.deleteMany({
+        where: { jobServiceSheetId: jobServiceSheet.id }
+      });
+    } else {
+      jobServiceSheet = await prisma.jobServiceSheet.create({
+        data: jobSheetPayload
+      });
+    }
+
+    // ✅ Materials save
+    if (materialRows.length > 0) {
+      await prisma.material.createMany({
+        data: materialRows.map((material) => ({
+          jobServiceSheetId: jobServiceSheet.id,
+          materialName:      material.materialName,
+          unitsUsed:         material.unitsUsed,
+          pricePerUnit:      material.pricePerUnit,
+          totalPrice:        material.totalPrice,
+        })),
+      });
+    }
+
+    // ✅ BoatPart warranty save
+    const installedBoatParts = [];
+
+    for (const boatPart of normalizedBoatPartsInput) {
+      const partId = parseInt(boatPart.partId ?? boatPart.id, 10);
+      if (Number.isNaN(partId)) continue;
+
+      const partRows = await mysqlQuery(
+        "SELECT * FROM `PartInventory` WHERE id = ? LIMIT 1",
+        [partId]
+      );
+
+      if (!partRows[0]) continue;
+
+      const installedDateValue =
+        boatPart.installedDate || installedDate || null;
+
+      const warrantyStartDateValue =
+        boatPart.warrantyStartDate ||
+        warrantyStartDate ||
+        installedDateValue ||
+        null;
+
+      const warrantyEndDate = calculateWarrantyEndDate(
+        warrantyStartDateValue,
+        partRows[0].warranty_duration,
+        partRows[0].warranty_type
+      );
+
+      const status = getWarrantyStatus(warrantyEndDate);
+
+      await mysqlQuery(
+        `INSERT INTO \`BoatPart\`
+          (boatId, partId, installedDate, warrantyStartDate, warrantyEndDate, status, notes, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          task.boatId,
+          partId,
+          installedDateValue     ? new Date(installedDateValue)     : null,
+          warrantyStartDateValue ? new Date(warrantyStartDateValue) : null,
+          warrantyEndDate,
+          status,
+          boatPart.notes || null,
+        ]
+      );
+
+      installedBoatParts.push({
+        partId,
+        boatId:            task.boatId,
+        installedDate:     installedDateValue,
+        warrantyStartDate: warrantyStartDateValue,
+        warrantyEndDate,
+        status,
+        notes:             boatPart.notes || null,
+      });
+    }
+
+    // ✅ Task status update
+    await prisma.task.update({
+      where: { id: parseInt(taskId) },
+      data:  { status: 2 }
+    });
+
+    return createSuccessResponse(res, 200, true, MessageEnum.JOB_SERVICE_SHEET, {
+      ...jobServiceSheet,
+      materials:  materialRows,
+      partsUsed: responsePartsUsed,
+      boatParts:  installedBoatParts,
+    });
+
+  } catch (error) {
+    console.error("JobServiceSheet Error:", error?.message, error?.stack);
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Internal server error",
+      status: 500,
+      data: {}
+    });
   }
 };
 
@@ -3091,3 +3720,4 @@ export async function getAllParts(req, res) {
     );
   }
 }
+
