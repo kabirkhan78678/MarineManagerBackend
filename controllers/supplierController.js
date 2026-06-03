@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { fileURLToPath } from 'url';
 import hbs from 'nodemailer-express-handlebars';
 import nodemailer from 'nodemailer';
@@ -13,7 +14,6 @@ import { MessageEnum } from '../config/message.js';
 import { createErrorResponse, createSuccessResponse } from '../utils/responseUtil.js';
 import { sendEmail } from '../utils/sendMail.js';
 import { createNotification, sendNotificationRelateToTask } from '../utils/notification.js';
-import { mysqlQuery } from '../utils/mysqlDb.js';
 import {
   getAvailablePartsForTaskUser,
   getExtraPartRequestsForTask
@@ -53,7 +53,7 @@ export async function getAllParts(req, res) {
       },
     });
 
-    const userIds = supplierLinks.map((link) => link.userId);
+    const userIds = [...new Set(supplierLinks.map((link) => link.userId))];
 
     const parts = userIds.length
       ? await prisma.partInventory.findMany({
@@ -62,23 +62,37 @@ export async function getAllParts(req, res) {
             in: userIds,
           },
         },
+        select: {
+          id: true,
+          userId: true,
+          name: true,
+          original_cost: true,
+          boat_owner_cost: true,
+          stock_quantity: true,
+          low_stock_alert: true,
+        },
         orderBy: {
           id: 'desc',
         },
       })
       : [];
 
-    const formatted = parts.map((part, index) => ({
-      sr_no: index + 1,
-      id: part.id,
-      user_id: part.userId,
-      name: part.name,
-      original_cost: part.original_cost,
-      boat_owner_cost: part.boat_owner_cost,
-      stock_quantity: part.stock_quantity,
-      low_stock_alert: part.low_stock_alert,
-      low_stock: part.stock_quantity <= part.low_stock_alert,
-    }));
+    const formatted = parts.map((part, index) => {
+      const stockQuantity = Number(part.stock_quantity ?? 0);
+      const lowStockAlert = Number(part.low_stock_alert ?? 10);
+
+      return {
+        sr_no: index + 1,
+        id: part.id,
+        user_id: part.userId,
+        name: part.name,
+        original_cost: Number(part.original_cost ?? 0),
+        boat_owner_cost: Number(part.boat_owner_cost ?? 0),
+        stock_quantity: stockQuantity,
+        low_stock_alert: lowStockAlert,
+        low_stock: stockQuantity <= lowStockAlert,
+      };
+    });
 
     return createSuccessResponse(
       res,
@@ -89,6 +103,14 @@ export async function getAllParts(req, res) {
     );
   } catch (error) {
     console.log(error);
+
+    if (error?.name === "PrismaClientInitializationError") {
+      return createErrorResponse(
+        res,
+        503,
+        "Database connection unavailable. Please check DATABASE_URL and make sure MySQL is running."
+      );
+    }
 
     return createErrorResponse(
       res,
@@ -573,11 +595,18 @@ export async function login(req, res) {
     }
   } catch (error) {
     console.log('error', error);
+    if (error?.name === "PrismaClientInitializationError") {
+      return res.status(503).json({
+        success: false,
+        message: "Database connection unavailable. Please check DATABASE_URL and make sure MySQL is running.",
+        status: 503,
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: "Internal server error",
       status: 500,
-      error,
     });
   }
 }
@@ -984,19 +1013,19 @@ export const createJobServiceSheet = async (req, res) => {
       requesterId: req.user.id,
     });
 
-    const pendingExtraPartRequests = existingExtraPartRequests.filter(
-      (request) => request.status !== "FULFILLED"
-    );
+    // const pendingExtraPartRequests = existingExtraPartRequests.filter(
+    //   (request) => request.status !== "FULFILLED"
+    // );
 
-    if (pendingExtraPartRequests.length > 0) {
-      return res.status(200).json({
-        success: false,
-        message:
-          "Extra parts request is still pending from user side. Please wait until all requested parts are added before updating the CDS Job Sheet.",
-        status: 200,
-        data: {},
-      });
-    }
+    // if (pendingExtraPartRequests.length > 0) {
+    //   return res.status(200).json({
+    //     success: false,
+    //     message:
+    //       "Extra parts request is still pending from user side. Please wait until all requested parts are added before updating the CDS Job Sheet.",
+    //     status: 200,
+    //     data: {},
+    //   });
+    // }
 
     const fulfilledExtraPartRequests = existingExtraPartRequests.filter(
       (request) => request.status === "FULFILLED"
@@ -1232,12 +1261,14 @@ export const createJobServiceSheet = async (req, res) => {
         continue;
       }
 
-      const partRows = await mysqlQuery(
-        "SELECT * FROM `PartInventory` WHERE id = ? AND userId = ? LIMIT 1",
-        [partId, task.userId]
-      );
+      const part = await prisma.partInventory.findFirst({
+        where: {
+          id: partId,
+          userId: task.userId,
+        },
+      });
 
-      if (!partRows[0]) {
+      if (!part) {
         continue;
       }
 
@@ -1250,26 +1281,28 @@ export const createJobServiceSheet = async (req, res) => {
 
       const warrantyEndDate = calculateWarrantyEndDate(
         warrantyStartDateValue,
-        partRows[0].warranty_duration,
-        partRows[0].warranty_type
+        part.warranty_duration,
+        part.warranty_type
       );
 
       const status = getWarrantyStatus(warrantyEndDate);
 
-      await mysqlQuery(
-        `INSERT INTO \`BoatPart\`
+      await prisma.$executeRaw`
+        INSERT INTO BoatPart
           (boatId, partId, installedDate, warrantyStartDate, warrantyEndDate, status, notes, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-        [
-          task.boatId,
-          partId,
-          installedDateValue ? new Date(installedDateValue) : null,
-          warrantyStartDateValue ? new Date(warrantyStartDateValue) : null,
-          warrantyEndDate,
-          status,
-          boatPart.notes || null,
-        ]
-      );
+        VALUES
+          (
+            ${task.boatId},
+            ${partId},
+            ${installedDateValue ? new Date(installedDateValue) : null},
+            ${warrantyStartDateValue ? new Date(warrantyStartDateValue) : null},
+            ${warrantyEndDate},
+            ${status},
+            ${boatPart.notes || null},
+            NOW(),
+            NOW()
+          )
+      `;
 
       installedBoatParts.push({
         partId,

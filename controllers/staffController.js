@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { fileURLToPath } from 'url';
 import hbs from 'nodemailer-express-handlebars';
 import nodemailer from 'nodemailer';
@@ -2728,7 +2729,7 @@ export const createJobServiceSheet = async (req, res) => {
     workCarriedOut,
     cdsSignature,
     materials,
-    partsUsed,
+    // partsUsed,
     boatParts,
     installedDate,
     warrantyStartDate,
@@ -2778,7 +2779,7 @@ export const createJobServiceSheet = async (req, res) => {
   };
 
   const normalizedMaterialsInput = parseArrayField(materials);
-  const normalizedPartsUsedInput = parseArrayField(partsUsed);
+  // const normalizedPartsUsedInput = parseArrayField(partsUsed);
   const normalizedBoatPartsInput = parseArrayField(boatParts);
 
   const schema = Joi.object({
@@ -2802,20 +2803,20 @@ export const createJobServiceSheet = async (req, res) => {
       })),
       Joi.string()
     ).optional(),
-    partsUsed: Joi.alternatives().try(
-      Joi.array().items(Joi.object({
-        id:           Joi.number().integer().optional(),
-        partId:       Joi.number().integer().optional(),
-        materialName: Joi.string().optional(),
-        name:         Joi.string().optional(),
-        partName:     Joi.string().optional(),
-        unitsUsed:    Joi.number().optional(),
-        quantity:     Joi.number().optional(),
-        pricePerUnit: Joi.number().optional(),
-        totalPrice:   Joi.number().optional()
-      })),
-      Joi.string()
-    ).optional(),
+    // partsUsed: Joi.alternatives().try(
+    //   Joi.array().items(Joi.object({
+    //     id:           Joi.number().integer().optional(),
+    //     partId:       Joi.number().integer().optional(),
+    //     materialName: Joi.string().optional(),
+    //     name:         Joi.string().optional(),
+    //     partName:     Joi.string().optional(),
+    //     unitsUsed:    Joi.number().optional(),
+    //     quantity:     Joi.number().optional(),
+    //     pricePerUnit: Joi.number().optional(),
+    //     totalPrice:   Joi.number().optional()
+    //   })),
+    //   Joi.string()
+    // ).optional(),
     boatParts: Joi.alternatives().try(
       Joi.array().items(Joi.object({
         id:               Joi.number().integer().optional(),
@@ -2831,7 +2832,7 @@ export const createJobServiceSheet = async (req, res) => {
   const payloadToValidate = {
     ...req.body,
     materials: normalizedMaterialsInput,
-    partsUsed: normalizedPartsUsedInput,
+    // partsUsed: normalizedPartsUsedInput,
     boatParts: normalizedBoatPartsInput,
   };
 
@@ -2871,18 +2872,18 @@ export const createJobServiceSheet = async (req, res) => {
       requesterId: req.user.id,
     });
 
-    const pendingExtraPartRequests = existingExtraPartRequests.filter(
-      (request) => request.status !== "FULFILLED"
-    );
+    // const pendingExtraPartRequests = existingExtraPartRequests.filter(
+    //   (request) => request.status !== "FULFILLED"
+    // );
 
-    if (pendingExtraPartRequests.length > 0) {
-      return res.status(200).json({
-        success: false,
-        message: "Extra parts request is still pending from user side. Please wait until all requested parts are added before updating the CDS Job Sheet.",
-        status: 200,
-        data: {},
-      });
-    }
+    // if (pendingExtraPartRequests.length > 0) {
+    //   return res.status(200).json({
+    //     success: false,
+    //     message: "Extra parts request is still pending from user side. Please wait until all requested parts are added before updating the CDS Job Sheet.",
+    //     status: 200,
+    //     data: {},
+    //   });
+    // }
 
     // ✅ Inventory parts fetch
     const fulfilledExtraPartRequests = existingExtraPartRequests.filter(
@@ -2929,16 +2930,19 @@ export const createJobServiceSheet = async (req, res) => {
       };
     });
 
-    const selectedPartIds = normalizedPartsUsedInput
-      .map((part) => parseInt(part.partId ?? part.id))
-      .filter((partId) => !Number.isNaN(partId));
+    // const selectedPartIds = normalizedPartsUsedInput
+    //   .map((part) => parseInt(part.partId ?? part.id))
+    //   .filter((partId) => !Number.isNaN(partId));
 
-    const requiredDatePartIds = [
-      ...new Set([
-        ...selectedPartIds,
-        ...fulfilledPartsUsed.map((part) => part.partId),
-      ]),
-    ];
+  const requiredDatePartIds = [
+  ...new Set(
+    normalizedBoatPartsInput
+      .map((boatPart) =>
+        parseInt(boatPart.partId ?? boatPart.id, 10)
+      )
+      .filter((id) => !Number.isNaN(id))
+  )
+];
     const boatPartDateMap = new Map(
       normalizedBoatPartsInput
         .map((boatPart) => ({
@@ -2955,20 +2959,31 @@ export const createJobServiceSheet = async (req, res) => {
         warrantyStartDate: boatPart?.warrantyStartDate || warrantyStartDate || null,
       };
     };
-    const getPartLabel = (partId) => {
-      const selectedPart = normalizedPartsUsedInput.find(
-        (part) => parseInt(part.partId ?? part.id, 10) === partId
-      );
-      const fulfilledPart = fulfilledPartsUsed.find((part) => part.partId === partId);
-      return (
-        selectedPart?.partName ||
-        selectedPart?.name ||
-        selectedPart?.materialName ||
-        fulfilledPart?.name ||
-        fulfilledPart?.materialName ||
-        `Part ${partId}`
-      );
-    };
+    // const getPartLabel = (partId) => {
+    //   const selectedPart = normalizedPartsUsedInput.find(
+    //     (part) => parseInt(part.partId ?? part.id, 10) === partId
+    //   );
+    //   const fulfilledPart = fulfilledPartsUsed.find((part) => part.partId === partId);
+    //   return (
+    //     selectedPart?.partName ||
+    //     selectedPart?.name ||
+    //     selectedPart?.materialName ||
+    //     fulfilledPart?.name ||
+    //     fulfilledPart?.materialName ||
+    //     `Part ${partId}`
+    //   );
+    // };
+   const getPartLabel = (partId) => {
+  const fulfilledPart = fulfilledPartsUsed.find(
+    (part) => part.partId === partId
+  );
+
+  return (
+    fulfilledPart?.name ||
+    fulfilledPart?.materialName ||
+    `Part ${partId}`
+  );
+};
     const missingDateParts = requiredDatePartIds
       .map((partId) => ({
         partId,
@@ -2997,44 +3012,44 @@ export const createJobServiceSheet = async (req, res) => {
       });
     }
 
-    const responsePartsUsed = [
-      ...normalizedPartsUsedInput.map((part) => {
-        const partId = parseInt(part.partId ?? part.id, 10);
-        const partDates = getPartDateValues(partId);
+    // const responsePartsUsed = [
+    //   ...normalizedPartsUsedInput.map((part) => {
+    //     const partId = parseInt(part.partId ?? part.id, 10);
+    //     const partDates = getPartDateValues(partId);
 
-        return {
-          ...part,
-          partId,
-          installedDate: partDates.installedDate,
-          warrantyStartDate: partDates.warrantyStartDate,
-        };
-      }),
-      ...fulfilledPartsUsed
-        .filter((part) => !selectedPartIds.includes(part.partId))
-        .map((part) => ({
-          ...part,
-          ...getPartDateValues(part.partId),
-        })),
-    ];
+    //     return {
+    //       ...part,
+    //       partId,
+    //       installedDate: partDates.installedDate,
+    //       warrantyStartDate: partDates.warrantyStartDate,
+    //     };
+    //   }),
+    //   ...fulfilledPartsUsed
+    //     .filter((part) => !selectedPartIds.includes(part.partId))
+    //     .map((part) => ({
+    //       ...part,
+    //       ...getPartDateValues(part.partId),
+    //     })),
+    // ];
 
-    const inventoryParts = selectedPartIds.length > 0
-      ? await prisma.partInventory.findMany({
-          where: {
-            userId: task.userId,
-            id: { in: selectedPartIds }
-          },
-          select: {
-            id: true,
-            name: true,
-            original_cost: true,
-            boat_owner_cost: true,
-          },
-        })
-      : [];
+    // const inventoryParts = selectedPartIds.length > 0
+    //   ? await prisma.partInventory.findMany({
+    //       where: {
+    //         userId: task.userId,
+    //         id: { in: selectedPartIds }
+    //       },
+    //       select: {
+    //         id: true,
+    //         name: true,
+    //         original_cost: true,
+    //         boat_owner_cost: true,
+    //       },
+    //     })
+    //   : [];
 
-    const inventoryPartMap = new Map(
-      inventoryParts.map((part) => [part.id, part])
-    );
+    // const inventoryPartMap = new Map(
+    //   inventoryParts.map((part) => [part.id, part])
+    // );
 
     // ✅ Material rows build
     const materialRows = [];
@@ -3062,52 +3077,59 @@ export const createJobServiceSheet = async (req, res) => {
       });
     });
 
-    normalizedPartsUsedInput.forEach((part) => {
-      const partId       = parseInt(part.partId ?? part.id);
-      const inventoryPart = inventoryPartMap.get(partId);
-      const materialName =
-        inventoryPart?.name ||
-        part.materialName ||
-        part.name ||
-        part.partName;
-      const unitsUsed = parseFloat(part.unitsUsed ?? part.quantity ?? 0);
+    // normalizedPartsUsedInput.forEach((part) => {
+    //   const partId       = parseInt(part.partId ?? part.id);
+    //   const inventoryPart = inventoryPartMap.get(partId);
+    //   const materialName =
+    //     inventoryPart?.name ||
+    //     part.materialName ||
+    //     part.name ||
+    //     part.partName;
+    //   const unitsUsed = parseFloat(part.unitsUsed ?? part.quantity ?? 0);
 
-      if (!materialName || Number.isNaN(unitsUsed) || unitsUsed <= 0) return;
+    //   if (!materialName || Number.isNaN(unitsUsed) || unitsUsed <= 0) return;
 
-      const fallbackPricePerUnit =
-        inventoryPart?.boat_owner_cost ??
-        inventoryPart?.original_cost ??
-        0;
+    //   const fallbackPricePerUnit =
+    //     inventoryPart?.boat_owner_cost ??
+    //     inventoryPart?.original_cost ??
+    //     0;
 
-      const pricePerUnit =
-        part.pricePerUnit !== undefined &&
-        part.pricePerUnit !== null &&
-        part.pricePerUnit !== ""
-          ? parseFloat(part.pricePerUnit)
-          : fallbackPricePerUnit;
+    //   const pricePerUnit =
+    //     part.pricePerUnit !== undefined &&
+    //     part.pricePerUnit !== null &&
+    //     part.pricePerUnit !== ""
+    //       ? parseFloat(part.pricePerUnit)
+    //       : fallbackPricePerUnit;
 
-      const totalPrice =
-        part.totalPrice !== undefined &&
-        part.totalPrice !== null &&
-        part.totalPrice !== ""
-          ? parseFloat(part.totalPrice)
-          : unitsUsed * pricePerUnit;
+    //   const totalPrice =
+    //     part.totalPrice !== undefined &&
+    //     part.totalPrice !== null &&
+    //     part.totalPrice !== ""
+    //       ? parseFloat(part.totalPrice)
+    //       : unitsUsed * pricePerUnit;
 
-      materialRows.push({ materialName, unitsUsed, pricePerUnit, totalPrice });
-    });
+    //   materialRows.push({ materialName, unitsUsed, pricePerUnit, totalPrice });
+    // });
 
     // ✅ Job sheet create/update
-    fulfilledPartsUsed.forEach((part) => {
-      if (selectedPartIds.includes(part.partId)) return;
+    // fulfilledPartsUsed.forEach((part) => {
+    //   if (selectedPartIds.includes(part.partId)) return;
 
-      materialRows.push({
-        materialName: part.materialName,
-        unitsUsed: part.unitsUsed,
-        pricePerUnit: part.pricePerUnit,
-        totalPrice: part.totalPrice,
-      });
-    });
-
+    //   materialRows.push({
+    //     materialName: part.materialName,
+    //     unitsUsed: part.unitsUsed,
+    //     pricePerUnit: part.pricePerUnit,
+    //     totalPrice: part.totalPrice,
+    //   });
+    // });
+fulfilledPartsUsed.forEach((part) => {
+  materialRows.push({
+    materialName: part.materialName,
+    unitsUsed: part.unitsUsed,
+    pricePerUnit: part.pricePerUnit,
+    totalPrice: part.totalPrice,
+  });
+});
     const jobSheetPayload = {
       date:              new Date(date),
       taskId:            parseInt(taskId),
@@ -3218,7 +3240,7 @@ export const createJobServiceSheet = async (req, res) => {
     return createSuccessResponse(res, 200, true, MessageEnum.JOB_SERVICE_SHEET, {
       ...jobServiceSheet,
       materials:  materialRows,
-      partsUsed: responsePartsUsed,
+      // partsUsed: responsePartsUsed,
       boatParts:  installedBoatParts,
     });
 
@@ -3681,29 +3703,42 @@ export async function getAllParts(req, res) {
         where: {
           userId: req.user.userId
         },
+        select: {
+          id: true,
+          name: true,
+          original_cost: true,
+          boat_owner_cost: true,
+          stock_quantity: true,
+          low_stock_alert: true,
+        },
         orderBy: {
           id: 'desc'
         }
       });
     const formatted =
-      parts.map((part, index) => ({
-        sr_no:
-          index + 1,
-        id:
-          part.id,
-        name:
-          part.name,
-        original_cost:
-          part.original_cost,
-        boat_owner_cost:
-          part.boat_owner_cost,
-        stock_quantity:
-          part.stock_quantity,
-        low_stock_alert:
-          part.low_stock_alert,
-        low_stock:
-          part.stock_quantity <= part.low_stock_alert,
-      }));
+      parts.map((part, index) => {
+        const stockQuantity = Number(part.stock_quantity ?? 0);
+        const lowStockAlert = Number(part.low_stock_alert ?? 10);
+
+        return {
+          sr_no:
+            index + 1,
+          id:
+            part.id,
+          name:
+            part.name,
+          original_cost:
+            Number(part.original_cost ?? 0),
+          boat_owner_cost:
+            Number(part.boat_owner_cost ?? 0),
+          stock_quantity:
+            stockQuantity,
+          low_stock_alert:
+            lowStockAlert,
+          low_stock:
+            stockQuantity <= lowStockAlert,
+        };
+      });
     return createSuccessResponse(
       res,
       200,
@@ -3713,6 +3748,15 @@ export async function getAllParts(req, res) {
     );
   } catch (error) {
     console.log(error);
+
+    if (error?.name === "PrismaClientInitializationError") {
+      return createErrorResponse(
+        res,
+        503,
+        "Database connection unavailable. Please check DATABASE_URL and make sure MySQL is running."
+      );
+    }
+
     return createErrorResponse(
       res,
       500,

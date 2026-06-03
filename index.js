@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import { userRouter } from './routes/userRouter.js'
 import cors from 'cors'
@@ -32,12 +33,13 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // MVP1 Ventures
 import { createProxyMiddleware } from "http-proxy-middleware";
-import { boatPartRouter } from './routes/boatPartRouter.js';
+import { serviceCategoryRouter } from './routes/ServiceCategoryRouter.js';
+// import { boatPartRouter } from './routes/boatPartRouter.js';
 
 
 const prisma = new PrismaClient();
 const app = express();
-const PORT = process.env.PORT || 4005;
+const PORT = process.env.PORT || 4008;
 
 // MVP1 Ventures
 const n8nApiURL = process.env.N8N_URL;
@@ -345,7 +347,8 @@ app.use('/subscription', subscriptionRouter);
 app.use('/services', serviceRouter);
 app.use('/xero', xeroRouter);
 app.use('/admin', adminRouter);
-app.use("/boatParts", boatPartRouter);
+app.use('/category',serviceCategoryRouter);
+// app.use("/boatParts", boatPartRouter);
 
 // MVP1 Ventures Commented - Start
 // app.get("/", (req, res) => {

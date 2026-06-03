@@ -26,9 +26,9 @@ function getWarrantyStatus(warrantyEndDate) {
   const endDate = new Date(warrantyEndDate);
   const diffDays = Math.ceil((endDate - today) / (1000 * 60 * 60 * 24));
 
-  if (diffDays < 0)   return { status: "EXPIRED",       daysRemaining: 0 };
+  if (diffDays < 0) return { status: "EXPIRED", daysRemaining: 0 };
   if (diffDays <= 30) return { status: "EXPIRING_SOON", daysRemaining: diffDays };
-  return               { status: "ACTIVE",              daysRemaining: diffDays };
+  return { status: "ACTIVE", daysRemaining: diffDays };
 }
 
 function formatPartInventoryResponse(part, index = null) {
@@ -714,9 +714,26 @@ export async function editProfile(req, res) {
       phone_no,
       service_region,
       services_offered,
+      location,
       BSB, ACC,
-      abn
+      abn,
+      categoryIds
     } = req.body;
+    let parsedCategoryIds = [];
+
+    if (req.body.categoryIds) {
+      try {
+        parsedCategoryIds =
+          typeof req.body.categoryIds === "string"
+            ? JSON.parse(req.body.categoryIds)
+            : req.body.categoryIds;
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid categoryIds format"
+        });
+      }
+    }
     const schema = Joi.object({
       company_name: Joi.string().optional(),
       accounting_software_used: Joi.string().optional().allow(''),
@@ -729,9 +746,13 @@ export async function editProfile(req, res) {
       last_name: Joi.string().max(255).required(),
       BSB: Joi.string().max(255).required(),
       ACC: Joi.string().max(255).required(),
+      location: Joi.string().optional().allow(''),
+      categoryIds: Joi.any().optional()
     });
-
-    const result = schema.validate(req.body);
+    const result = schema.validate({
+      ...req.body,
+      categoryIds: parsedCategoryIds
+    });
     if (result.error) {
       const message = result.error.details.map(i => i.message).join(",");
       return res.status(400).json({
@@ -773,12 +794,33 @@ export async function editProfile(req, res) {
       phone_no: phone_no || req.user.phone_no,
       services_offered: services_offered !== null && services_offered !== undefined ? services_offered : req.user.services_offered,
       abn: abn !== null && abn !== undefined ? abn : req.user.abn,
+      location: location !== null && location !== undefined ? location : req.user.location
     };
 
     await prisma.user.update({
       where: { id: req.user.id },
       data: userData,
     });
+
+    if (Array.isArray(parsedCategoryIds)) {
+
+      await prisma.userServiceCategory.deleteMany({
+        where: {
+          userId: req.user.id
+        }
+      });
+
+      if (parsedCategoryIds.length > 0) {
+
+        await prisma.userServiceCategory.createMany({
+          data: parsedCategoryIds.map(categoryId => ({
+            userId: req.user.id,
+            categoryId: Number(categoryId)
+          }))
+        });
+
+      }
+    }
 
     if (req.files && req.files['insurance']) {
       for (const file of req.files['insurance']) {
@@ -791,10 +833,23 @@ export async function editProfile(req, res) {
       }
     }
 
-    const updatedUser = await prisma.user.findUnique({
-      where: { id: req.user.id },
-    });
-
+ const updatedUser = await prisma.user.findUnique({
+  where: {
+    id: req.user.id
+  },
+  include: {
+    UserServiceCategory: {
+      include: {
+        category: {
+          select: {
+            id: true,
+            name: true
+          }
+        }
+      }
+    }
+  }
+});
     if (updatedUser?.profile_image) {
       updatedUser.profile_image = `${baseurl}/profile/${updatedUser.profile_image}`;
     }
@@ -825,10 +880,25 @@ export async function myProfile(req, res) {
         id: req.user.id
       },
       include: {
-        InsuranceFile: true
+        InsuranceFile: true,
+
+        UserServiceCategory: {
+          include: {
+            category: {
+              select: {
+                id: true,
+                name: true
+              }
+            }
+          }
+        }
       }
     })
+    user.categories = user.UserServiceCategory.map(
+  item => item.category
+);
 
+delete user.UserServiceCategory;
     if (user.company_logo) {
       user.company_logo = `${baseurl}/profile/${user.company_logo}`
     }
@@ -838,6 +908,7 @@ export async function myProfile(req, res) {
     if (user.trade_license) {
       user.trade_license = `${baseurl}/profile/${user.trade_license}`
     }
+    user.location = user.location || "";
 
     if (user.InsuranceFile.length > 0) {
 

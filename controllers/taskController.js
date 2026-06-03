@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { fileURLToPath } from 'url';
 import Joi from "joi";
 import hbs from 'nodemailer-express-handlebars';
@@ -12,6 +12,7 @@ const baseurl = process.env.BASE_URL;
 import { createErrorResponse, createSuccessResponse } from "../utils/responseUtil.js";
 import { generateRandomUICNumber, getDateRanges, randomStringAsBase64Url } from '../utils/helper.js';
 import { sendEmail } from '../utils/sendMail.js';
+import { ensureExtraPartRequestTable } from './extraPartRequestController.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const prisma = new PrismaClient();
@@ -1739,65 +1740,275 @@ export async function getJobManagementTasks(req, res) {
     // FILTERS
     // =========================
 
-    const whereCondition = {
-      userId: req.user.id,
-    };
+    let searchText = "";
+    let searchedBoatIds = null;
+    let normalizedAssignmentType = "";
 
     // Search by boat name or rego
     if (search) {
-      whereCondition.boat = {
-        OR: [
-          {
-            name: {
-              contains: search,
-              mode: "insensitive",
-            },
+      searchText = String(search).trim();
+
+      if (searchText) {
+        const matchingBoats = await prisma.boat.findMany({
+          where: {
+            userId: req.user.id,
+            OR: [
+              {
+                name: {
+                  contains: searchText,
+                },
+              },
+              {
+                rego: {
+                  contains: searchText,
+                },
+              },
+            ],
           },
-          {
-            rego: {
-              contains: search,
-              mode: "insensitive",
-            },
+          select: {
+            id: true,
           },
-        ],
-      };
+        });
+
+        searchedBoatIds = matchingBoats.map((boat) => boat.id);
+
+        if (searchedBoatIds.length === 0) {
+          return res.status(200).json({
+            success: true,
+            message: "Job management data fetched successfully",
+            counts: {
+              total: 0,
+              completed: 0,
+              pending: 0,
+              overdue: 0,
+            },
+            data: [],
+          });
+        }
+      }
     }
 
     // Assignment Type Filter
     if (assignmentType) {
-      whereCondition.assign_to = assignmentType;
+      normalizedAssignmentType = String(assignmentType).toUpperCase();
+
+      if (!["STAFF", "OUTSOURCED"].includes(normalizedAssignmentType)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid assignmentType. Allowed values are STAFF and OUTSOURCED.",
+        });
+      }
     }
 
     // =========================
     // FETCH TASKS
     // =========================
 
-    const tasks = await prisma.task.findMany({
-      where: whereCondition,
+    const taskFilters = [
+      Prisma.sql`userId = ${req.user.id}`,
+    ];
 
-      include: {
+    if (normalizedAssignmentType) {
+      taskFilters.push(Prisma.sql`assign_to = ${normalizedAssignmentType}`);
+    }
 
-        boat: true,
+    if (searchedBoatIds) {
+      taskFilters.push(Prisma.sql`boatId IN (${Prisma.join(searchedBoatIds)})`);
+    }
 
-        supplier: true,
+    const taskRows = await prisma.$queryRaw`
+      SELECT
+        id,
+        assign_to,
+        jobNumber,
+        CAST(date_scheduled_to AS CHAR) AS date_scheduled_to,
+        status,
+        timer_status,
+        quoted_value,
+        invoiceId,
+        createdAt,
+        boatId,
+        assignStaffId
+      FROM Task
+      WHERE ${Prisma.join(taskFilters, " AND ")}
+      ORDER BY id DESC
+    `;
 
-        staff: true,
+    const taskIds = taskRows.map((task) => Number(task.id));
+    const boatIds = [
+      ...new Set(
+        taskRows
+          .map((task) => Number(task.boatId))
+          .filter((boatId) => Number.isFinite(boatId))
+      ),
+    ];
+    const staffIds = [
+      ...new Set(
+        taskRows
+          .map((task) => Number(task.assignStaffId))
+          .filter((staffId) => Number.isFinite(staffId))
+      ),
+    ];
 
-        invoice: true,
-
-        TaskServices: true,
-
-        TaskSupplierOffer: {
-          include: {
-            supplier: true,
+    const [
+      boats,
+      staffMembers,
+      taskServices,
+      taskSupplierOffers,
+      jobServiceSheets,
+    ] = taskIds.length
+      ? await Promise.all([
+        boatIds.length
+          ? prisma.boat.findMany({
+            where: {
+              id: {
+                in: boatIds,
+              },
+            },
+            select: {
+              id: true,
+              name: true,
+              rego: true,
+            },
+          })
+          : Promise.resolve([]),
+        staffIds.length
+          ? prisma.staff_Member.findMany({
+            where: {
+              id: {
+                in: staffIds,
+              },
+            },
+            select: {
+              id: true,
+              full_name: true,
+            },
+          })
+          : Promise.resolve([]),
+        prisma.taskService.findMany({
+          where: {
+            taskId: {
+              in: taskIds,
+            },
           },
-        },
-      },
+          select: {
+            taskId: true,
+            serviceName: true,
+          },
+        }),
+        prisma.taskSupplierOffer.findMany({
+          where: {
+            taskId: {
+              in: taskIds,
+            },
+          },
+          select: {
+            taskId: true,
+            status: true,
+            supplier: {
+              select: {
+                first_name: true,
+                last_name: true,
+                company_name: true,
+              },
+            },
+          },
+        }),
+        prisma.jobServiceSheet.findMany({
+          where: {
+            taskId: {
+              in: taskIds,
+            },
+          },
+          select: {
+            id: true,
+            taskId: true,
+            Material: {
+              select: {
+                id: true,
+                materialName: true,
+                unitsUsed: true,
+              },
+            },
+          },
+          orderBy: {
+            id: "desc",
+          },
+        }),
+      ])
+      : [[], [], [], [], []];
 
-      orderBy: {
-        id: "desc",
-      },
+    const boatPartRows = boatIds.length
+      ? await prisma.$queryRaw`
+        SELECT
+          bp.id,
+          bp.boatId,
+          bp.partId,
+          pi.name AS partName,
+          CAST(bp.installedDate AS CHAR) AS installedDate,
+          CAST(bp.warrantyStartDate AS CHAR) AS warrantyStartDate,
+          bp.notes,
+          bp.createdAt
+        FROM BoatPart bp
+        INNER JOIN PartInventory pi ON pi.id = bp.partId
+        WHERE bp.boatId IN (${Prisma.join(boatIds)})
+        ORDER BY bp.id DESC
+      `
+      : [];
+
+    const boatById = new Map(boats.map((boat) => [boat.id, boat]));
+    const staffById = new Map(staffMembers.map((staff) => [staff.id, staff]));
+    const servicesByTaskId = new Map();
+    const offersByTaskId = new Map();
+    const latestJobSheetByTaskId = new Map();
+    const boatPartByBoatAndName = new Map();
+
+    taskServices.forEach((service) => {
+      const taskId = Number(service.taskId);
+      const services = servicesByTaskId.get(taskId) || [];
+      services.push(service);
+      servicesByTaskId.set(taskId, services);
     });
+
+    taskSupplierOffers.forEach((offer) => {
+      const taskId = Number(offer.taskId);
+      const offers = offersByTaskId.get(taskId) || [];
+      offers.push(offer);
+      offersByTaskId.set(taskId, offers);
+    });
+
+    jobServiceSheets.forEach((sheet) => {
+      const taskId = Number(sheet.taskId);
+
+      if (!latestJobSheetByTaskId.has(taskId)) {
+        latestJobSheetByTaskId.set(taskId, sheet);
+      }
+    });
+
+    boatPartRows.forEach((boatPart) => {
+      const key = `${Number(boatPart.boatId)}::${String(boatPart.partName || "").toLowerCase()}`;
+
+      if (!boatPartByBoatAndName.has(key)) {
+        boatPartByBoatAndName.set(key, boatPart);
+      }
+    });
+
+    const tasks = taskRows.map((task) => ({
+      id: Number(task.id),
+      assign_to: task.assign_to,
+      jobNumber: task.jobNumber,
+      date_scheduled_to: task.date_scheduled_to,
+      status: Number(task.status),
+      timer_status: task.timer_status,
+      quoted_value: task.quoted_value,
+      invoiceId: task.invoiceId ? Number(task.invoiceId) : null,
+      createdAt: task.createdAt,
+      boat: boatById.get(Number(task.boatId)) || null,
+      staff: staffById.get(Number(task.assignStaffId)) || null,
+      TaskServices: servicesByTaskId.get(Number(task.id)) || [],
+      TaskSupplierOffer: offersByTaskId.get(Number(task.id)) || [],
+      JobServiceSheet: latestJobSheetByTaskId.get(Number(task.id)) || null,
+    }));
 
     // =========================
     // FORMAT RESPONSE
@@ -1806,6 +2017,7 @@ export async function getJobManagementTasks(req, res) {
     const formattedTasks = tasks.map((task) => {
 
       const dueDate = new Date(task.date_scheduled_to);
+      const isValidDueDate = !Number.isNaN(dueDate.getTime());
 
       const today = new Date();
 
@@ -1819,7 +2031,7 @@ export async function getJobManagementTasks(req, res) {
       };
 
       // Completed
-      if (task.status === 4) {
+      if (task.status === 2 || task.status === 4 || task.timer_status === "COMPLETED") {
 
         taskStatus = {
           label: "COMPLETED",
@@ -1828,7 +2040,7 @@ export async function getJobManagementTasks(req, res) {
       }
 
       // Overdue
-      else if (dueDate < today) {
+      else if (isValidDueDate && dueDate < today) {
 
         taskStatus = {
           label: "OVERDUE",
@@ -1846,7 +2058,7 @@ export async function getJobManagementTasks(req, res) {
 
         const firstOffer = task.TaskSupplierOffer?.[0];
 
-        if (firstOffer?.status === "APPROVED") {
+        if (firstOffer?.status === "ACCEPTED") {
 
           approvalStatus = {
             label: "Accepted",
@@ -1875,6 +2087,29 @@ export async function getJobManagementTasks(req, res) {
       // RETURN FORMATTED TASK
       // =========================
 
+      const jobSheetParts = (task.JobServiceSheet?.Material || []).map((material) => {
+        const materialName = material.materialName || "-";
+        const boatPartKey = `${task.boat?.id || ""}::${String(materialName).toLowerCase()}`;
+        const boatPart = boatPartByBoatAndName.get(boatPartKey);
+        const installedDate = boatPart?.installedDate ? new Date(boatPart.installedDate) : null;
+        const warrantyStartDate = boatPart?.warrantyStartDate ? new Date(boatPart.warrantyStartDate) : null;
+        const isValidInstalledDate = installedDate && !Number.isNaN(installedDate.getTime());
+        const isValidWarrantyStartDate = warrantyStartDate && !Number.isNaN(warrantyStartDate.getTime());
+
+        return {
+          partName: materialName,
+          partsName: materialName,
+          quantity: Number(material.unitsUsed || 0),
+          installedDate: isValidInstalledDate
+            ? installedDate.toLocaleDateString("en-GB")
+            : null,
+          warrantyStartDate: isValidWarrantyStartDate
+            ? warrantyStartDate.toLocaleDateString("en-GB")
+            : null,
+          notes: boatPart?.notes || "",
+        };
+      });
+
       return {
 
         taskId: task.id,
@@ -1899,7 +2134,10 @@ export async function getJobManagementTasks(req, res) {
         assignedName:
           task.assign_to === "STAFF"
             ? task.staff?.full_name || "-"
-            : task.TaskSupplierOffer?.[0]?.supplier?.full_name ||
+            : [
+              task.TaskSupplierOffer?.[0]?.supplier?.first_name,
+              task.TaskSupplierOffer?.[0]?.supplier?.last_name,
+            ].filter(Boolean).join(" ") ||
             task.TaskSupplierOffer?.[0]?.supplier?.company_name ||
             "-",
 
@@ -1942,8 +2180,14 @@ export async function getJobManagementTasks(req, res) {
               : "No services added",
         },
 
-        dueDate: new Date(task.date_scheduled_to)
-          .toLocaleDateString("en-GB"),
+        parts: {
+          count: jobSheetParts.length,
+          items: jobSheetParts,
+        },
+
+        dueDate: isValidDueDate
+          ? dueDate.toLocaleDateString("en-GB")
+          : null,
 
         status: {
           label: taskStatus.label,
@@ -1995,8 +2239,10 @@ export async function getJobManagementTasks(req, res) {
 
     if (status) {
 
+      const normalizedStatus = String(status).toUpperCase();
+
       filteredTasks = formattedTasks.filter(
-        (item) => item.status.label === status
+        (item) => item.status.label === normalizedStatus
       );
     }
 
@@ -2050,6 +2296,403 @@ export async function getJobManagementTasks(req, res) {
 }
 
 
+// export const getJobDetailById = async (req, res) => {
+//   try {
+
+//     const taskId = Number(req.params.taskId);
+
+//     // =========================
+//     // VALIDATION
+//     // =========================
+
+//     if (!taskId) {
+
+//       return createErrorResponse(
+//         res,
+//         400,
+//         "Task id is required"
+//       );
+//     }
+
+//     // =========================
+//     // FETCH TASK
+//     // =========================
+
+//     const task = await prisma.task.findFirst({
+
+//       where: {
+//         id: taskId,
+//         userId: req.user.id,
+//       },
+
+//       include: {
+
+//         boat: true,
+
+//         user: true,
+
+//         staff: true,
+
+//         supplier: true,
+
+//         invoice: true,
+
+//         TaskPhoto: true,
+
+//         TaskServices: true,
+
+//         JobServiceSheet: true,
+
+//         TaskSupplierOffer: {
+//           include: {
+//             supplier: true,
+//           },
+//         },
+//       },
+//     });
+
+//     // =========================
+//     // NOT FOUND
+//     // =========================
+
+//     if (!task) {
+
+//       return createErrorResponse(
+//         res,
+//         404,
+//         "Task not found"
+//       );
+//     }
+
+//     // =========================
+//     // TASK STATUS
+//     // =========================
+
+//     let taskStatus = {
+//       label: "PENDING",
+//       color: "#F59E0B",
+//       number: 1,
+//     };
+
+//     // COMPLETED
+//     if (
+//       task.status === 4 ||
+//       task.completed_at
+//     ) {
+
+//       taskStatus = {
+//         label: "COMPLETED",
+//         color: "#22C55E",
+//         number: 4,
+//       };
+//     }
+
+//     // OVERDUE
+//     else if (
+//       task.date_scheduled_to &&
+//       new Date(task.date_scheduled_to) < new Date()
+//     ) {
+
+//       taskStatus = {
+//         label: "OVERDUE",
+//         color: "#EF4444",
+//         number: 3,
+//       };
+//     }
+
+//     // =========================
+//     // ASSIGNED USER
+//     // =========================
+
+//     let assignedUser = null;
+
+//     if (task.assign_to === "STAFF") {
+
+//       assignedUser = {
+
+//         type: "TECHNICIAN",
+
+//         id:
+//           task.staff?.id || null,
+
+//         name:
+//           task.staff?.full_name || "-",
+
+//         email:
+//           task.staff?.email || "-",
+
+//         phone:
+//           task.staff?.phone_no || "-",
+
+//         profileImage:
+//           task.staff?.profile_image || null,
+//       };
+//     }
+
+//     else {
+
+//       const supplier =
+//         task.TaskSupplierOffer?.[0]?.supplier;
+
+//       assignedUser = {
+
+//         type: "SUPPLIER",
+
+//         id:
+//           supplier?.id || null,
+
+//         name:
+//           supplier?.full_name ||
+//           supplier?.company_name ||
+//           "-",
+
+//         email:
+//           supplier?.email || "-",
+
+//         phone:
+//           supplier?.phone_no || "-",
+
+//         profileImage:
+//           supplier?.profile_image || null,
+//       };
+//     }
+
+//     // =========================
+//     // SERVICES
+//     // =========================
+
+//     const services =
+//       task.TaskServices.map((service) => ({
+
+//         serviceId:
+//           service.id,
+
+//         serviceName:
+//           service.serviceName || "-",
+
+//         description:
+//           service.description ||
+//           "No description available",
+
+//         cost:
+//           Number(
+//             service.servicePrice || 0
+//           ),
+//       }));
+
+//     // =========================
+//     // PARTS USED
+//     // =========================
+
+//     // Replace later with DB table
+
+//     const partsUsed = [
+
+//       {
+//         partName:
+//           "Marine Fuel Filter",
+
+//         quantity: 2,
+
+//         cost: 124,
+//       },
+
+//       {
+//         partName:
+//           "Synthetic 10W-40",
+
+//         quantity: "8L",
+
+//         cost: 96,
+//       },
+//     ];
+
+//     // =========================
+//     // TOTALS
+//     // =========================
+
+//     const servicesTotal =
+//       services.reduce(
+//         (sum, item) =>
+//           sum + Number(item.cost),
+//         0
+//       );
+
+//     const partsTotal =
+//       partsUsed.reduce(
+//         (sum, item) =>
+//           sum + Number(item.cost),
+//         0
+//       );
+
+//     const grandTotal =
+//       servicesTotal + partsTotal;
+
+//     // =========================
+//     // RESPONSE
+//     // =========================
+
+//     return createSuccessResponse(
+//       res,
+//       200,
+//       true,
+//       "Job detail fetched successfully",
+//       {
+
+//         // =========================
+//         // HEADER ACTIONS
+//         // =========================
+
+//         actions: {
+
+//           canViewInvoice:
+//             !!task.invoiceId,
+
+//           canSendInvoice:
+//             taskStatus.number === 4,
+//         },
+
+//         // =========================
+//         // JOB OVERVIEW
+//         // =========================
+
+//         jobOverview: {
+
+//           boatId:
+//             task.boatId || null,
+
+//           boatName:
+//             task.boat?.name || "-",
+
+//           dockLocation:
+//             task.boat?.dockLocation ||
+//             "-",
+
+//           createdDate:
+//             new Date(task.createdAt)
+//               .toLocaleDateString(
+//                 "en-GB"
+//               ),
+
+//           dueDate:
+//             task.date_scheduled_to
+//               ? new Date(
+//                 task.date_scheduled_to
+//               ).toLocaleDateString(
+//                 "en-GB"
+//               )
+//               : "-",
+
+//           jobId:
+//             task.jobNumber ||
+//             `#${task.id}`,
+
+//           status:
+//             taskStatus,
+//         },
+
+//         // =========================
+//         // ASSIGNED USER
+//         // =========================
+
+//         assignedUser,
+
+//         // =========================
+//         // SERVICES TABLE
+//         // =========================
+
+//         services,
+
+//         // =========================
+//         // PARTS USED
+//         // =========================
+
+//         partsUsed,
+
+//         // =========================
+//         // COST SUMMARY
+//         // =========================
+
+//         costSummary: {
+
+//           servicesTotal,
+
+//           partsTotal,
+
+//           grandTotal,
+
+//           taxIncluded: true,
+//         },
+
+//         // =========================
+//         // INVOICE
+//         // =========================
+
+//         invoice: {
+
+//           exists:
+//             !!task.invoiceId,
+
+//           invoiceId:
+//             task.invoiceId || null,
+//         },
+
+//         // =========================
+//         // PHOTOS
+//         // =========================
+
+//         photos:
+//           task.TaskPhoto || [],
+
+//         // =========================
+//         // SERVICE SHEET
+//         // =========================
+
+//         serviceSheet:
+//           task.JobServiceSheet || null,
+
+//         // =========================
+//         // META
+//         // =========================
+
+//         meta: {
+
+//           taskId:
+//             task.id,
+
+//           boatId:
+//             task.boatId || null,
+
+//           invoiceId:
+//             task.invoiceId || null,
+
+//           description:
+//             task.description,
+
+//           quotedValue:
+//             task.quoted_value,
+
+//           createdAt:
+//             task.createdAt,
+
+//           updatedAt:
+//             task.updatedAt,
+//         },
+//       }
+//     );
+
+//   } catch (error) {
+
+//     console.log(error);
+
+//     return createErrorResponse(
+//       res,
+//       500,
+//       "Internal Server Error"
+//     );
+//   }
+// };
+
 export const getJobDetailById = async (req, res) => {
   try {
 
@@ -2060,12 +2703,7 @@ export const getJobDetailById = async (req, res) => {
     // =========================
 
     if (!taskId) {
-
-      return createErrorResponse(
-        res,
-        400,
-        "Task id is required"
-      );
+      return createErrorResponse(res, 400, "Task id is required");
     }
 
     // =========================
@@ -2073,34 +2711,32 @@ export const getJobDetailById = async (req, res) => {
     // =========================
 
     const task = await prisma.task.findFirst({
-
       where: {
         id: taskId,
         userId: req.user.id,
       },
-
       include: {
-
         boat: true,
-
         user: true,
-
         staff: true,
-
         supplier: true,
-
         invoice: true,
-
         TaskPhoto: true,
-
         TaskServices: true,
-
-        JobServiceSheet: true,
-
         TaskSupplierOffer: {
           include: {
             supplier: true,
           },
+        },
+        // ✅ Latest JobServiceSheet with Materials
+        JobServiceSheet: {
+          include: {
+            Material: true,
+          },
+          orderBy: {
+            id: "desc",
+          },
+          take: 1,
         },
       },
     });
@@ -2110,12 +2746,7 @@ export const getJobDetailById = async (req, res) => {
     // =========================
 
     if (!task) {
-
-      return createErrorResponse(
-        res,
-        404,
-        "Task not found"
-      );
+      return createErrorResponse(res, 404, "Task not found");
     }
 
     // =========================
@@ -2128,25 +2759,16 @@ export const getJobDetailById = async (req, res) => {
       number: 1,
     };
 
-    // COMPLETED
-    if (
-      task.status === 4 ||
-      task.completed_at
-    ) {
-
+    if (task.status === 4 || task.completed_at) {
       taskStatus = {
         label: "COMPLETED",
         color: "#22C55E",
         number: 4,
       };
-    }
-
-    // OVERDUE
-    else if (
+    } else if (
       task.date_scheduled_to &&
       new Date(task.date_scheduled_to) < new Date()
     ) {
-
       taskStatus = {
         label: "OVERDUE",
         color: "#EF4444",
@@ -2161,53 +2783,26 @@ export const getJobDetailById = async (req, res) => {
     let assignedUser = null;
 
     if (task.assign_to === "STAFF") {
-
       assignedUser = {
-
         type: "TECHNICIAN",
-
-        id:
-          task.staff?.id || null,
-
-        name:
-          task.staff?.full_name || "-",
-
-        email:
-          task.staff?.email || "-",
-
-        phone:
-          task.staff?.phone_no || "-",
-
-        profileImage:
-          task.staff?.profile_image || null,
+        id: task.staff?.id || null,
+        name: task.staff?.full_name || "-",
+        email: task.staff?.email || "-",
+        phone: task.staff?.phone_no || "-",
+        profileImage: task.staff?.profile_image || null,
       };
-    }
-
-    else {
-
-      const supplier =
-        task.TaskSupplierOffer?.[0]?.supplier;
-
+    } else {
+      const supplier = task.TaskSupplierOffer?.[0]?.supplier;
       assignedUser = {
-
         type: "SUPPLIER",
-
-        id:
-          supplier?.id || null,
-
+        id: supplier?.id || null,
         name:
           supplier?.full_name ||
           supplier?.company_name ||
           "-",
-
-        email:
-          supplier?.email || "-",
-
-        phone:
-          supplier?.phone_no || "-",
-
-        profileImage:
-          supplier?.profile_image || null,
+        email: supplier?.email || "-",
+        phone: supplier?.phone_no || "-",
+        profileImage: supplier?.profile_image || null,
       };
     }
 
@@ -2215,75 +2810,240 @@ export const getJobDetailById = async (req, res) => {
     // SERVICES
     // =========================
 
-    const services =
-      task.TaskServices.map((service) => ({
-
-        serviceId:
-          service.id,
-
-        serviceName:
-          service.serviceName || "-",
-
-        description:
-          service.description ||
-          "No description available",
-
-        cost:
-          Number(
-            service.servicePrice || 0
-          ),
-      }));
+    const services = task.TaskServices.map((service) => ({
+      serviceId: service.id,
+      serviceName: service.serviceName || "-",
+      description: service.description || "No description available",
+      cost: Number(service.servicePrice || 0),
+    }));
 
     // =========================
     // PARTS USED
+    // ✅ Same logic as getJobManagementTasks
     // =========================
 
-    // Replace later with DB table
+    // Step 1: Get latest JobServiceSheet (already fetched with take:1)
+    const jobServiceSheet = task.JobServiceSheet?.[0] || null;
 
-    const partsUsed = [
+    // Step 2: Fetch BoatPart + PartInventory for this boat
+    const boatPartRows = task.boatId
+      ? await prisma.$queryRaw`
+          SELECT
+            bp.id,
+            bp.boatId,
+            bp.partId,
+            pi.name AS partName,
+            CAST(bp.installedDate AS CHAR) AS installedDate,
+            CAST(bp.warrantyStartDate AS CHAR) AS warrantyStartDate,
+            bp.notes,
+            bp.createdAt
+          FROM BoatPart bp
+          INNER JOIN PartInventory pi ON pi.id = bp.partId
+          WHERE bp.boatId = ${task.boatId}
+          ORDER BY bp.id DESC
+        `
+      : [];
 
-      {
-        partName:
-          "Marine Fuel Filter",
+    await ensureExtraPartRequestTable();
 
-        quantity: 2,
+    const fulfilledExtraPartRows = await prisma.$queryRaw`
+      SELECT
+        e.id,
+        e.partName,
+        e.unitsUsed,
+        e.partInventoryId,
+        e.materialId,
+        p.name AS addedPartName,
+        p.original_cost AS addedPartOriginalCost,
+        p.boat_owner_cost AS addedPartBoatOwnerCost,
+        m.materialName AS attachedMaterialName,
+        m.unitsUsed AS attachedMaterialUnitsUsed,
+        m.pricePerUnit AS attachedMaterialPricePerUnit,
+        m.totalPrice AS attachedMaterialTotalPrice
+      FROM \`ExtraPartRequest\` e
+      LEFT JOIN \`PartInventory\` p ON p.id = e.partInventoryId
+      LEFT JOIN \`Material\` m ON m.id = e.materialId
+      WHERE e.taskId = ${task.id}
+        AND e.status = 'FULFILLED'
+      ORDER BY e.id DESC
+    `;
 
-        cost: 124,
-      },
+    // Step 3: Build lookup map — partName (lowercase) -> boatPart
+    const normalizePartName = (value) =>
+      String(value || "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .toLowerCase();
 
-      {
-        partName:
-          "Synthetic 10W-40",
+    const toNumber = (value, fallback = 0) => {
+      const parsedValue = Number(value);
+      return Number.isFinite(parsedValue) ? parsedValue : fallback;
+    };
 
-        quantity: "8L",
+    const toPositiveNumber = (value, fallback = 0) => {
+      const parsedValue = Number(value);
+      return Number.isFinite(parsedValue) && parsedValue > 0
+        ? parsedValue
+        : fallback;
+    };
 
-        cost: 96,
-      },
-    ];
+    const boatPartByName = new Map();
+    const boatPartByPartId = new Map();
+    boatPartRows.forEach((boatPart) => {
+      const key = normalizePartName(boatPart.partName);
+      if (!boatPartByName.has(key)) {
+        boatPartByName.set(key, boatPart);
+      }
 
-    // =========================
-    // TOTALS
-    // =========================
+      const partId = toNumber(boatPart.partId, null);
+      if (partId && !boatPartByPartId.has(partId)) {
+        boatPartByPartId.set(partId, boatPart);
+      }
+    });
 
-    const servicesTotal =
-      services.reduce(
-        (sum, item) =>
-          sum + Number(item.cost),
-        0
+    const requestPartByName = new Map();
+    const requestPartByMaterialId = new Map();
+
+    const buildRequestPart = (row) => {
+      const partName =
+        row.addedPartName ||
+        row.attachedMaterialName ||
+        row.partName ||
+        "-";
+      const quantity = toPositiveNumber(
+        row.attachedMaterialUnitsUsed,
+        toPositiveNumber(row.unitsUsed)
+      );
+      const pricePerUnit = toPositiveNumber(
+        row.attachedMaterialPricePerUnit,
+        toPositiveNumber(row.addedPartBoatOwnerCost, toPositiveNumber(row.addedPartOriginalCost))
+      );
+      const cost = toPositiveNumber(
+        row.attachedMaterialTotalPrice,
+        quantity * pricePerUnit
       );
 
-    const partsTotal =
-      partsUsed.reduce(
-        (sum, item) =>
-          sum + Number(item.cost),
-        0
-      );
+      return {
+        extraPartRequestId: toNumber(row.id, null),
+        materialId: toNumber(row.materialId, null),
+        partId: toNumber(row.partInventoryId, null),
+        partName,
+        quantity,
+        pricePerUnit,
+        cost,
+      };
+    };
 
-    const grandTotal =
-      servicesTotal + partsTotal;
+    fulfilledExtraPartRows.forEach((row) => {
+      const requestPart = buildRequestPart(row);
+      const nameKey = normalizePartName(requestPart.partName);
+
+      if (requestPart.materialId && !requestPartByMaterialId.has(requestPart.materialId)) {
+        requestPartByMaterialId.set(requestPart.materialId, requestPart);
+      }
+
+      if (nameKey && !requestPartByName.has(nameKey)) {
+        requestPartByName.set(nameKey, requestPart);
+      }
+    });
+
+    const usedRequestPartIds = new Set();
+
+    const formatPartDates = (boatPart) => {
+      const installedDate = boatPart?.installedDate
+        ? new Date(boatPart.installedDate)
+        : null;
+      const warrantyStartDate = boatPart?.warrantyStartDate
+        ? new Date(boatPart.warrantyStartDate)
+        : null;
+
+      const isValidInstalledDate =
+        installedDate && !Number.isNaN(installedDate.getTime());
+      const isValidWarrantyStartDate =
+        warrantyStartDate && !Number.isNaN(warrantyStartDate.getTime());
+
+      return {
+        installedDate: isValidInstalledDate
+          ? installedDate.toLocaleDateString("en-GB")
+          : "",
+        warrantyStartDate: isValidWarrantyStartDate
+          ? warrantyStartDate.toLocaleDateString("en-GB")
+          : "",
+      };
+    };
+
+    // Step 4: Map materials from JobServiceSheet -> parts response
+    const partsUsed = (jobServiceSheet?.Material || []).map((material) => {
+      const materialName = material.materialName || "-";
+      const requestPart =
+        requestPartByMaterialId.get(material.id) ||
+        requestPartByName.get(normalizePartName(materialName));
+      const boatPart =
+        (requestPart?.partId && boatPartByPartId.get(requestPart.partId)) ||
+        boatPartByName.get(normalizePartName(materialName));
+
+      if (requestPart?.extraPartRequestId) {
+        usedRequestPartIds.add(requestPart.extraPartRequestId);
+      }
+
+      const partDates = formatPartDates(boatPart);
+
+      return {
+        partName: requestPart?.partName || materialName,
+        partsName: requestPart?.partName || materialName,
+        quantity: toPositiveNumber(requestPart?.quantity, toNumber(material.unitsUsed)),
+        cost: toPositiveNumber(requestPart?.cost, toNumber(
+          material.totalPrice,
+          toNumber(material.pricePerUnit) * toNumber(material.unitsUsed)
+        )),
+        installedDate: partDates.installedDate,
+        warrantyStartDate: partDates.warrantyStartDate,
+        notes: boatPart?.notes || "",
+      };
+    });
+
+    fulfilledExtraPartRows.forEach((row) => {
+      const requestPart = buildRequestPart(row);
+
+      if (usedRequestPartIds.has(requestPart.extraPartRequestId)) {
+        return;
+      }
+
+      const boatPart =
+        (requestPart.partId && boatPartByPartId.get(requestPart.partId)) ||
+        boatPartByName.get(normalizePartName(requestPart.partName));
+      const partDates = formatPartDates(boatPart);
+
+      partsUsed.push({
+        partName: requestPart.partName,
+        partsName: requestPart.partName,
+        quantity: requestPart.quantity,
+        cost: requestPart.cost,
+        installedDate: partDates.installedDate,
+        warrantyStartDate: partDates.warrantyStartDate,
+        notes: boatPart?.notes || "",
+      });
+    });
 
     // =========================
-    // RESPONSE
+    // COST SUMMARY
+    // ✅ partsTotal now from real data
+    // =========================
+
+    const servicesTotal = services.reduce(
+      (sum, item) => sum + Number(item.cost),
+      0
+    );
+
+    const partsTotal = partsUsed.reduce(
+      (sum, item) => sum + Number(item.cost || 0),
+      0
+    );
+
+    const grandTotal = servicesTotal + partsTotal;
+
+    // =========================
+    // FINAL RESPONSE
     // =========================
 
     return createSuccessResponse(
@@ -2292,157 +3052,61 @@ export const getJobDetailById = async (req, res) => {
       true,
       "Job detail fetched successfully",
       {
-
-        // =========================
-        // HEADER ACTIONS
-        // =========================
-
         actions: {
-
-          canViewInvoice:
-            !!task.invoiceId,
-
-          canSendInvoice:
-            taskStatus.number === 4,
+          canViewInvoice: !!task.invoiceId,
+          canSendInvoice: taskStatus.number === 4,
         },
-
-        // =========================
-        // JOB OVERVIEW
-        // =========================
 
         jobOverview: {
-
-          boatId:
-            task.boatId || null,
-
-          boatName:
-            task.boat?.name || "-",
-
-          dockLocation:
-            task.boat?.dockLocation ||
-            "-",
-
-          createdDate:
-            new Date(task.createdAt)
-              .toLocaleDateString(
-                "en-GB"
-              ),
-
-          dueDate:
-            task.date_scheduled_to
-              ? new Date(
-                task.date_scheduled_to
-              ).toLocaleDateString(
-                "en-GB"
-              )
-              : "-",
-
-          jobId:
-            task.jobNumber ||
-            `#${task.id}`,
-
-          status:
-            taskStatus,
+          boatId: task.boatId || null,
+          boatName: task.boat?.name || "-",
+          dockLocation: task.boat?.dockLocation || "-",
+          createdDate: new Date(task.createdAt).toLocaleDateString("en-GB"),
+          dueDate: task.date_scheduled_to
+            ? new Date(task.date_scheduled_to).toLocaleDateString("en-GB")
+            : "-",
+          jobId: task.jobNumber || `#${task.id}`,
+          status: taskStatus,
         },
-
-        // =========================
-        // ASSIGNED USER
-        // =========================
 
         assignedUser,
 
-        // =========================
-        // SERVICES TABLE
-        // =========================
-
         services,
 
-        // =========================
-        // PARTS USED
-        // =========================
-
+        // ✅ Real parts data now
         partsUsed,
 
-        // =========================
-        // COST SUMMARY
-        // =========================
-
         costSummary: {
-
           servicesTotal,
-
+          // ✅ Real parts total now
           partsTotal,
-
           grandTotal,
-
           taxIncluded: true,
         },
 
-        // =========================
-        // INVOICE
-        // =========================
-
         invoice: {
-
-          exists:
-            !!task.invoiceId,
-
-          invoiceId:
-            task.invoiceId || null,
+          exists: !!task.invoiceId,
+          invoiceId: task.invoiceId || null,
         },
 
-        // =========================
-        // PHOTOS
-        // =========================
+        photos: task.TaskPhoto || [],
 
-        photos:
-          task.TaskPhoto || [],
-
-        // =========================
-        // SERVICE SHEET
-        // =========================
-
-        serviceSheet:
-          task.JobServiceSheet || null,
-
-        // =========================
-        // META
-        // =========================
+        serviceSheet: task.JobServiceSheet || null,
 
         meta: {
-
-          taskId:
-            task.id,
-
-          boatId:
-            task.boatId || null,
-
-          invoiceId:
-            task.invoiceId || null,
-
-          description:
-            task.description,
-
-          quotedValue:
-            task.quoted_value,
-
-          createdAt:
-            task.createdAt,
-
-          updatedAt:
-            task.updatedAt,
+          taskId: task.id,
+          boatId: task.boatId || null,
+          invoiceId: task.invoiceId || null,
+          description: task.description,
+          quotedValue: task.quoted_value,
+          createdAt: task.createdAt,
+          updatedAt: task.updatedAt,
         },
       }
     );
 
   } catch (error) {
-
     console.log(error);
-
-    return createErrorResponse(
-      res,
-      500,
-      "Internal Server Error"
-    );
+    return createErrorResponse(res, 500, "Internal Server Error");
   }
 };

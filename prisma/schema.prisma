@@ -28,6 +28,7 @@ model User {
   password                 String
   first_name               String
   last_name                String
+  location                 String?
   company_name             String                @db.LongText
   phone_no                 String
   fcm_token                String?
@@ -65,6 +66,7 @@ model User {
   SubscriptionHistory      SubscriptionHistory[]
   Task                     Task[]
   UserSupplier             UserSupplier[]
+  UserServiceCategory      UserServiceCategory[]
 }
 
 model InsuranceFile {
@@ -106,6 +108,7 @@ model Boat {
   boat_length_category LengthCategory?
   user                 User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   DockBooking          DockBooking[]
+  BoatPart             BoatPart[]
   Invoice              Invoice[]
   JobServiceSheet      JobServiceSheet[]
   Task                 Task[]
@@ -231,18 +234,42 @@ model Task {
 }
 
 model PartInventory {
-  id              Int       @id @default(autoincrement())
-  name            String    @db.VarChar(255)
-  original_cost   Float     @db.Float
-  boat_owner_cost Float     @db.Float
-  stock_quantity  Int?      @default(0)
-  low_stock_alert Int?      @default(10)
-  createdAt       DateTime? @default(now()) @db.DateTime(0)
-  updatedAt       DateTime? @default(now()) @updatedAt @db.DateTime(0)
-  userId          Int
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "fk_part_inventory_user")
+  id                Int        @id @default(autoincrement())
+  name              String     @db.VarChar(255)
+  original_cost     Float      @db.Float
+  boat_owner_cost   Float      @db.Float
+  stock_quantity    Int?       @default(0)
+  low_stock_alert   Int?       @default(10)
+  warranty_duration Int?
+  warranty_type     String?    @default("MONTHS") @db.VarChar(20)
+  part_number       String?    @db.VarChar(255)
+  manufacturer      String?    @db.VarChar(255)
+  serial_number     String?    @db.VarChar(255)
+  createdAt         DateTime?  @default(now()) @db.DateTime(0)
+  updatedAt         DateTime?  @default(now()) @updatedAt @db.DateTime(0)
+  userId            Int
+  BoatPart          BoatPart[]
+  user              User       @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "fk_part_inventory_user")
 
   @@index([userId], map: "fk_part_inventory_user")
+}
+
+model BoatPart {
+  id                Int           @id @default(autoincrement())
+  boatId            Int
+  partId            Int
+  installedDate     DateTime?     @db.DateTime(0)
+  warrantyStartDate DateTime?     @db.DateTime(0)
+  warrantyEndDate   DateTime?     @db.DateTime(0)
+  status            String?       @db.VarChar(50)
+  notes             String?       @db.LongText
+  createdAt         DateTime?     @default(now()) @db.DateTime(0)
+  updatedAt         DateTime?     @default(now()) @updatedAt @db.DateTime(0)
+  boat              Boat          @relation(fields: [boatId], references: [id], onDelete: Cascade)
+  part              PartInventory @relation(fields: [partId], references: [id], onDelete: Cascade)
+
+  @@index([boatId], map: "BoatPart_boatId_fkey")
+  @@index([partId], map: "BoatPart_partId_fkey")
 }
 
 model QuickLeads {
@@ -594,4 +621,27 @@ enum Task_TaskEfficiency {
   GOOD
   AVERAGE
   POOR
+}
+
+
+model ServiceCategory {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  isCustom  Boolean  @default(false)
+  status    Int      @default(1)
+  UserServiceCategory UserServiceCategory[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("servicecategory")
+}
+
+
+model UserServiceCategory {
+  id         Int @id @default(autoincrement())
+  userId     Int
+  categoryId Int
+  user       User @relation(fields: [userId], references: [id])
+  category   ServiceCategory @relation(fields: [categoryId], references: [id])
+  createdAt  DateTime @default(now())
 }
