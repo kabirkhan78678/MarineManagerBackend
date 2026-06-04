@@ -1,5 +1,5 @@
 import express from "express";
-import { activeStaffMembers, addStaffMember, changePassword, changePasswordApi, completeTask, createJobServiceSheet, deleteStaffMemberById, editStaffMember, forgotPassword, getAllMytasks, getAllStaffMembers, getCompletedTasks, getMyProfile, getTodayTasks, getTomorrowTask, getStaffMemberById, login, toggleStaffStatus, updateTaskTimer, verifyPassword,getTaskById, getAllParts } from "../controllers/staffController.js";
+import { activeStaffMembers, addStaffMember, changePassword, changePasswordApi, completeTask, createJobServiceSheet, deleteStaffMemberById, editStaffMember, forgotPassword, getAllMytasks, getAllStaffMembers, getCompletedTasks, getMyProfile, getTodayTasks, getTomorrowTask, getStaffMemberById, login, toggleStaffStatus, updateTaskTimer, verifyPassword,getTaskById, getAllParts, getStaffRoleById, getStaffRoles } from "../controllers/staffController.js";
 import { createJobServiceSheet as createSupplierJobServiceSheet } from "../controllers/supplierController.js";
 import { auth } from "../middlewares/auth.js";
 import { staffAuth } from "../middlewares/staffAuth.js";
@@ -89,3 +89,14 @@ staffRouter.get('/getAllParts', staffAuth, getAllParts);
 staffRouter.post('/extra-part-requests', staffAuth, createStaffExtraPartRequest);
 
 staffRouter.get('/extra-part-requests', staffAuth, getStaffExtraPartRequests);
+
+staffRouter.get(
+  "/roles",
+  getStaffRoles
+);
+
+staffRouter.get(
+  "/roles/:id",
+  getStaffRoleById
+);
+

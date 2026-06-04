@@ -137,39 +137,41 @@ model Staff_Member {
   user                       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   Task                       Task[]
   TaskPhoto                  TaskPhoto[]
-
+  StaffMasterCategory StaffMasterCategory[]
   @@index([userId], map: "Staff_Member_userId_fkey")
 }
 
 model Supplier {
-  id                       Int                     @id @default(autoincrement())
-  email                    String                  @unique
+  id                       Int                       @id @default(autoincrement())
+  email                    String                    @unique
   password                 String?
   first_name               String?
   last_name                String?
-  company_name             String?                 @db.LongText
-  company_description      String?                 @db.LongText
-  status                   Int                     @default(1)
+  company_name             String?                   @db.LongText
+  company_description      String?                   @db.LongText
+  status                   Int                       @default(1)
   phone_no                 String?
   city                     String?
   company_logo             String?
   abn                      String?
   token                    String?
   trade_license            String?
-  accounting_software_used String?                 @db.LongText
-  about_us                 String?                 @db.LongText
-  service_region           String?                 @db.LongText
-  services_offered         String?                 @db.LongText
+  accounting_software_used String?                   @db.LongText
+  about_us                 String?                   @db.LongText
+  service_region           String?                   @db.LongText
+  services_offered         String?                   @db.LongText
   role                     String?
-  complete_profile_status  Int                     @default(0)
-  createdAt                DateTime                @default(now())
-  updatedAt                DateTime                @updatedAt
+  complete_profile_status  Int                       @default(0)
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
   JobServiceSheet          JobServiceSheet[]
   SupplierInsuranceFile    SupplierInsuranceFile[]
   Task                     Task[]
   TaskPhoto                TaskPhoto[]
   TaskSupplierOffer        TaskSupplierOffer[]
   UserSupplier             UserSupplier[]
+  SupplierServiceCategory  SupplierServiceCategory[]
+  SupplierMasterCategory SupplierMasterCategory[]
 }
 
 model SupplierInsuranceFile {
@@ -623,25 +625,86 @@ enum Task_TaskEfficiency {
   POOR
 }
 
-
 model ServiceCategory {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  isCustom  Boolean  @default(false)
-  status    Int      @default(1)
-  UserServiceCategory UserServiceCategory[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                      Int                       @id @default(autoincrement())
+  name                    String                    @unique
+  isCustom                Boolean                   @default(false)
+  status                  Int                       @default(1)
+  UserServiceCategory     UserServiceCategory[]
+  SupplierServiceCategory SupplierServiceCategory[]
+  createdAt               DateTime                  @default(now())
+  updatedAt               DateTime                  @updatedAt
 
   @@map("servicecategory")
 }
 
-
 model UserServiceCategory {
-  id         Int @id @default(autoincrement())
+  id         Int             @id @default(autoincrement())
   userId     Int
   categoryId Int
-  user       User @relation(fields: [userId], references: [id])
+  user       User            @relation(fields: [userId], references: [id])
   category   ServiceCategory @relation(fields: [categoryId], references: [id])
-  createdAt  DateTime @default(now())
+  createdAt  DateTime        @default(now())
+}
+
+model SupplierServiceCategory {
+  id         Int             @id @default(autoincrement())
+  supplierId Int
+  categoryId Int
+  supplier   Supplier        @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  category   ServiceCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  createdAt  DateTime        @default(now())
+
+  @@unique([supplierId, categoryId])
+}
+
+// model TechnicianRole {
+//   id          Int            @id @default(autoincrement())
+//   name        String         @unique
+//   status      Int            @default(1)
+//   StaffMember Staff_Member[]
+//   createdAt   DateTime       @default(now())
+//   updatedAt   DateTime       @updatedAt
+// }
+
+model MasterCategory {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  isCustom  Boolean  @default(false)
+  status    Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  SupplierMasterCategory SupplierMasterCategory[]
+  StaffMasterCategory    StaffMasterCategory[]
+
+  @@map("mastercategory")
+}
+
+model SupplierMasterCategory {
+  id         Int @id @default(autoincrement())
+
+  supplierId Int
+  categoryId Int
+
+  supplier   Supplier       @relation(fields: [supplierId], references: [id])
+  category   MasterCategory @relation(fields: [categoryId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@map("suppliermastercategory")
+}
+
+model StaffMasterCategory {
+  id         Int @id @default(autoincrement())
+
+  staffId    Int
+  categoryId Int
+
+  staff      Staff_Member   @relation(fields: [staffId], references: [id])
+  category   MasterCategory @relation(fields: [categoryId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@map("staffmastercategory")
 }

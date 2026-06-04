@@ -39,6 +39,29 @@ function normalizeRequestedParts(parts) {
     .filter(Boolean);
 }
 
+function formatPartInventoryResponse(part) {
+  const stockQuantity = Number(part.stock_quantity ?? 0);
+  const lowStockAlert = Number(part.low_stock_alert ?? 10);
+
+  return {
+    id: part.id,
+    userId: part.userId,
+    name: part.name ?? null,
+    original_cost: part.original_cost,
+    boat_owner_cost: part.boat_owner_cost,
+    stock_quantity: part.stock_quantity,
+    low_stock_alert: part.low_stock_alert,
+    low_stock: stockQuantity <= lowStockAlert,
+    warranty_duration: part.warranty_duration ?? null,
+    warranty_type: part.warranty_type ?? null,
+    part_number: part.part_number ?? null,
+    manufacturer: part.manufacturer ?? null,
+    serial_number: part.serial_number ?? null,
+    createdAt: part.createdAt,
+    updatedAt: part.updatedAt,
+  };
+}
+
 export async function ensureExtraPartRequestTable() {
   if (!tableReadyPromise) {
     tableReadyPromise = mysqlQuery(`
@@ -664,12 +687,25 @@ export async function fulfillExtraPartRequest(req, res) {
         [partResult.insertId, materialId, fulfilledMessage, request.id]
       );
 
+      const [createdParts] = await connection.execute(
+        `SELECT *
+         FROM \`PartInventory\`
+         WHERE id = ? AND userId = ?
+         LIMIT 1`,
+        [partResult.insertId, req.user.id]
+      );
+      const addedPart = formatPartInventoryResponse(createdParts[0]);
+
       return {
         requestId: request.id,
         partInventoryId: partResult.insertId,
         materialId,
         jobServiceSheetId: request.jobServiceSheetId,
         message: fulfilledMessage,
+        stock_quantity: addedPart.stock_quantity,
+        low_stock_alert: addedPart.low_stock_alert,
+        low_stock: addedPart.low_stock,
+        addedPart,
       };
     });
 

@@ -8,7 +8,7 @@ import Joi from 'joi';
 import path from 'path';
 import crypto from 'crypto';
 import localStorage from 'localStorage'
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient,Prisma  } from '@prisma/client';
 import { getDateRanges, randomStringAsBase64Url } from '../utils/helper.js';
 import { MessageEnum } from '../config/message.js';
 import { createErrorResponse, createSuccessResponse } from '../utils/responseUtil.js';
@@ -32,6 +32,84 @@ var transporter = nodemailer.createTransport({
     rejectUnauthorized: false, // This allows self-signed certificates
   },
 });
+
+
+function parseCategoryIds(value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return [];
+
+  let parsed = value;
+
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch (error) {
+      parsed = value.split(",");
+    }
+  }
+
+  if (!Array.isArray(parsed)) {
+    parsed = [parsed];
+  }
+
+  return [
+    ...new Set(
+      parsed
+        .map(Number)
+        .filter((id) => Number.isInteger(id) && id > 0)
+    ),
+  ];
+}
+
+function formatServiceCategories(links = []) {
+  return links
+    .map((link) => link.category)
+    .filter(Boolean)
+    .map((category) => ({
+      id: category.id,
+      name: category.name,
+    }));
+}
+
+async function validateServiceCategoryIds(categoryIds) {
+  if (categoryIds === undefined || categoryIds.length === 0) {
+    return true;
+  }
+
+  const count = await prisma.serviceCategory.count({
+    where: {
+      id: {
+        in: categoryIds,
+      },
+    },
+  });
+
+  return count === categoryIds.length;
+}
+
+async function replaceSupplierServiceCategories(
+  tx,
+  supplierId,
+  categoryIds
+) {
+  if (categoryIds === undefined) return;
+
+  await tx.supplierServiceCategory.deleteMany({
+    where: {
+      supplierId,
+    },
+  });
+
+  if (categoryIds.length) {
+    await tx.supplierServiceCategory.createMany({
+      data: categoryIds.map((categoryId) => ({
+        supplierId,
+        categoryId,
+      })),
+      skipDuplicates: true,
+    });
+  }
+}
 
 
 const handlebarOptions = {
@@ -186,13 +264,37 @@ const baseurl = process.env.BASE_URL;
 export async function addSupplier(req, res) {
   try {
     const { email, name, role } = req.body;
+    // const categoryIds = parseCategoryIds(req.body.categoryIds ?? req.body.serviceCategoryIds);
+    let parsedRole = [];
+
+    if (role) {
+      try {
+        parsedRole =
+          typeof role === "string"
+            ? JSON.parse(role)
+            : role;
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid role format"
+        });
+      }
+    }
     console.log(req.body);
     console.log("after");
 
     const schema = Joi.object({
       email: Joi.string().min(5).max(255).email({ tlds: { allow: false } }).lowercase().required(),
       name: Joi.string().required(),
-      role: Joi.string().max(255).optional().allow(""),
+      role: Joi.any().optional(),
+      // categoryIds: Joi.alternatives().try(
+      //   Joi.array().items(Joi.number().integer().positive()),
+      //   Joi.string().allow("")
+      // ).optional(),
+      serviceCategoryIds: Joi.alternatives().try(
+        Joi.array().items(Joi.number().integer().positive()),
+        Joi.string().allow("")
+      ).optional(),
     });
 
 
@@ -201,6 +303,25 @@ export async function addSupplier(req, res) {
       return res.status(400).json({ message: error.details[0].message, success: false });
     }
 
+    // if (!(await validateServiceCategoryIds(categoryIds))) {
+    //   return createErrorResponse(res, 400, "Invalid service category selected");
+    // }
+    const roleCount =
+      await prisma.masterCategory.count({
+        where: {
+          id: {
+            in: parsedRole.map(Number)
+          }
+        }
+      });
+
+    if (roleCount !== parsedRole.length) {
+      return createErrorResponse(
+        res,
+        400,
+        "Invalid role selected"
+      );
+    }
     // Check if supplier already exists
     let supplier = await prisma.supplier.findUnique({ where: { email } });
 
@@ -212,7 +333,8 @@ export async function addSupplier(req, res) {
         data: {
           email,
           token: inviteToken,
-          role: role || null,
+          // role: role || null,
+          role: JSON.stringify(parsedRole),
         },
       });
     } else {
@@ -220,7 +342,11 @@ export async function addSupplier(req, res) {
         where: { id: supplier.id },
         data: {
           token: inviteToken,
-          role: role !== undefined ? role : supplier.role,
+          // role: role !== undefined ? role : supplier.role,
+          role:
+            parsedRole.length > 0
+              ? JSON.stringify(parsedRole)
+              : supplier.role,
         },
       });
     }
@@ -236,13 +362,16 @@ export async function addSupplier(req, res) {
       return createErrorResponse(res, 400, MessageEnum.SUPPLIER_ALREADY_LINKED);
     }
 
-    // Link the supplier to the user
-    await prisma.userSupplier.create({
-      data: {
-        userId: req.user.id,
-        supplierId: supplier.id,
-        name: name
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.userSupplier.create({
+        data: {
+          userId: req.user.id,
+          supplierId: supplier.id,
+          name: name
+        },
+      });
+
+      // await replaceSupplierServiceCategories(tx, supplier.id, categoryIds);
     });
 
     const mailOptions = {
@@ -264,7 +393,26 @@ export async function addSupplier(req, res) {
     } catch (mailError) {
       console.error("supplier invite email error", mailError);
     }
+    let roleDetails = [];
 
+    if (parsedRole.length > 0) {
+
+      roleDetails =
+        await prisma.masterCategory.findMany({
+          where: {
+            id: {
+              in: parsedRole.map(Number)
+            },
+            status: 1
+          },
+          select: {
+            id: true,
+            name: true,
+            isCustom: true
+          }
+        });
+
+    }
     return createSuccessResponse(res, 200, true, MessageEnum.SUPPLIER_ADDED);
   } catch (error) {
     console.error(error);
@@ -278,6 +426,21 @@ export async function editSupplier(req, res) {
     console.log("here");
 
     const { company_name, company_description, city, phone_no, id, role } = req.body;
+    let parsedRole = [];
+
+    if (role) {
+      try {
+        parsedRole =
+          typeof role === "string"
+            ? JSON.parse(role)
+            : role;
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid role format"
+        });
+      }
+    }
     console.log(req.body);
     console.log("after");
 
@@ -287,7 +450,15 @@ export async function editSupplier(req, res) {
       company_description: Joi.string().optional(),
       city: Joi.string().optional(),
       phone_no: Joi.string().optional(),
-      role: Joi.string().optional().allow(""),
+      role: Joi.any().optional(),
+      categoryIds: Joi.alternatives().try(
+        Joi.array().items(Joi.number().integer().positive()),
+        Joi.string().allow("")
+      ).optional(),
+      serviceCategoryIds: Joi.alternatives().try(
+        Joi.array().items(Joi.number().integer().positive()),
+        Joi.string().allow("")
+      ).optional(),
       id: Joi.number().required()
     });
 
@@ -326,20 +497,113 @@ export async function editSupplier(req, res) {
       return createErrorResponse(res, 403, MessageEnum.SUPPLIER_NOT_FOUND);
     }
 
-    await prisma.supplier.update({
-      where: {
-        id: parseInt(id)
-      },
-      data: {
-        company_name: company_name ? company_name : supplier.company_name,
-        company_description: company_description ? company_description : supplier.company_description,
-        city: city ? city : supplier.city,
-        phone_no: phone_no ? phone_no : supplier.phone_no,
-        role: role !== undefined ? role : supplier.role,
-      },
-    });
+    if (parsedRole.length > 0) {
 
-    return createSuccessResponse(res, 200, true, MessageEnum.SUPPLIER_EDITED);
+      const roleCount =
+        await prisma.masterCategory.count({
+          where: {
+            id: {
+              in: parsedRole.map(Number)
+            },
+            status: 1
+          }
+        });
+
+      if (roleCount !== parsedRole.length) {
+
+        return createErrorResponse(
+          res,
+          400,
+          "Invalid role selected"
+        );
+
+      }
+
+    }
+
+    const updatedSupplier =
+      await prisma.supplier.update({
+        where: {
+          id: parseInt(id)
+        },
+        data: {
+          company_name:
+            company_name || supplier.company_name,
+
+          company_description:
+            company_description || supplier.company_description,
+
+          city:
+            city || supplier.city,
+
+          phone_no:
+            phone_no || supplier.phone_no,
+
+          role:
+            parsedRole.length > 0
+              ? JSON.stringify(parsedRole)
+              : supplier.role
+        }
+      });
+
+    let roleIds = [];
+    let roleDetails = [];
+
+    if (updatedSupplier.role) {
+
+      try {
+
+        roleIds =
+          JSON.parse(updatedSupplier.role);
+
+        roleDetails =
+          await prisma.masterCategory.findMany({
+            where: {
+              id: {
+                in: roleIds.map(Number)
+              }
+            },
+            select: {
+              id: true,
+              name: true,
+              isCustom: true,
+              status: true,
+              createdAt: true,
+              updatedAt: true
+            }
+          });
+
+      } catch (error) {
+
+        roleIds = [];
+        roleDetails = [];
+
+      }
+
+    }
+
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      MessageEnum.SUPPLIER_EDITED,
+      {
+        id: updatedSupplier.id,
+
+        company_name:
+          updatedSupplier.company_name,
+
+        // roleIds,
+
+        role: roleDetails,
+
+        city:
+          updatedSupplier.city,
+
+        phone_no:
+          updatedSupplier.phone_no
+      }
+    );
 
   } catch (error) {
     console.log(error);
@@ -378,7 +642,12 @@ export async function getAllSuppliers(req, res) {
       include: {
         supplier: {
           include: {
-            SupplierInsuranceFile: true
+            SupplierInsuranceFile: true,
+            SupplierServiceCategory: {
+              include: {
+                category: true,
+              },
+            },
           }
         },
       },
@@ -403,13 +672,50 @@ export async function getAllSuppliers(req, res) {
       const completedTasks = tasks.filter((task) => task.status === 1).length;
       const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
+      let roleIds = [];
+      let roleDetails = [];
+
+      if (supplier.role) {
+
+        try {
+
+          roleIds = JSON.parse(supplier.role);
+
+          roleDetails =
+            await prisma.masterCategory.findMany({
+              where: {
+                id: {
+                  in: roleIds.map(Number)
+                }
+              },
+              select: {
+                id: true,
+                name: true,
+                isCustom: true,
+                status: true,
+                createdAt: true,
+                updatedAt: true
+              }
+            });
+
+        } catch (error) {
+
+          roleIds = [];
+          roleDetails = [];
+
+        }
+
+      }
+
       return {
         id: supplier.id,
         name: item.name || supplier.company_name || `${supplier.first_name || ''} ${supplier.last_name || ''}`.trim() || supplier.email,
         company_name: supplier.company_name,
         email: supplier.email,
         phone_no: supplier.phone_no,
-        role: supplier.role,
+        role: roleDetails,
+        serviceCategoryIds: supplier.SupplierServiceCategory.map((item) => item.categoryId),
+        serviceCategories: formatServiceCategories(supplier.SupplierServiceCategory),
         company_logo: supplier.company_logo ? `${baseurl}/profile/${supplier.company_logo}` : null,
         status: supplier.status,
         total_tasks: totalTasks,
@@ -448,6 +754,11 @@ export async function getSupplierById(req, res) {
         supplier: {
           include: {
             SupplierInsuranceFile: true,
+            SupplierServiceCategory: {
+              include: {
+                category: true,
+              },
+            },
           },
         },
       },
@@ -458,6 +769,40 @@ export async function getSupplierById(req, res) {
     }
 
     const supplier = linkedSupplier.supplier;
+    let roleIds = [];
+    let roleDetails = [];
+
+    if (supplier.role) {
+
+      try {
+
+        roleIds = JSON.parse(supplier.role);
+
+        roleDetails =
+          await prisma.masterCategory.findMany({
+            where: {
+              id: {
+                in: roleIds.map(Number)
+              }
+            },
+            select: {
+              id: true,
+              name: true,
+              isCustom: true,
+              status: true,
+              createdAt: true,
+              updatedAt: true
+            }
+          });
+
+      } catch (error) {
+
+        roleIds = [];
+        roleDetails = [];
+
+      }
+
+    }
     const tasks = await prisma.task.findMany({
       where: {
         userId: req.user.id,
@@ -479,7 +824,9 @@ export async function getSupplierById(req, res) {
       last_name: supplier.last_name,
       email: supplier.email,
       phone_no: supplier.phone_no,
-      role: supplier.role,
+      role: roleDetails,
+      serviceCategoryIds: supplier.SupplierServiceCategory.map((item) => item.categoryId),
+      serviceCategories: formatServiceCategories(supplier.SupplierServiceCategory),
       company_name: supplier.company_name,
       company_description: supplier.company_description,
       city: supplier.city,
@@ -581,7 +928,17 @@ export async function login(req, res) {
 
       const supplierData = await prisma.supplier.findUnique({
         where: { email },
+        include: {
+          SupplierServiceCategory: {
+            include: {
+              category: true,
+            },
+          },
+        },
       });
+      supplierData.serviceCategoryIds = supplierData.SupplierServiceCategory.map((item) => item.categoryId);
+      supplierData.serviceCategories = formatServiceCategories(supplierData.SupplierServiceCategory);
+      delete supplierData.SupplierServiceCategory;
 
       const token = jwt.sign({ supplierId: supplierData.id }, secretKey, { expiresIn: '24w' });
       return res.json({
@@ -830,6 +1187,523 @@ export async function getCompletedTasks(req, res) {
   }
 };
 
+// export const createJobServiceSheet = async (req, res) => {
+//   const {
+//     taskId,
+//     date,
+//     jobNumber,
+//     personAttending,
+//     customerName,
+//     mobile,
+//     workToBeCarriedOut,
+//     workCarriedOut,
+//     furtherActionRequired,
+//     further_action_required,
+//     cdsSignature,
+//     materials,
+//     partsUsed,
+//     boatParts,
+//     installedDate,
+//     warrantyStartDate,
+//   } = req.body;
+
+//   const parseArrayField = (value) => {
+//     if (!value) return [];
+//     if (Array.isArray(value)) return value;
+
+//     if (typeof value === "string") {
+//       try {
+//         const parsedValue = JSON.parse(value);
+//         return Array.isArray(parsedValue) ? parsedValue : [];
+//       } catch (parseError) {
+//         return [];
+//       }
+//     }
+
+//     return [];
+//   };
+
+//   const calculateWarrantyEndDate = (startDate, duration, type) => {
+//     if (!startDate || !duration || !type) return null;
+
+//     const warrantyEndDate = new Date(startDate);
+
+//     switch (String(type).toUpperCase()) {
+//       case "DAYS":
+//         warrantyEndDate.setDate(
+//           warrantyEndDate.getDate() + parseInt(duration, 10)
+//         );
+//         break;
+//       case "MONTHS":
+//         warrantyEndDate.setMonth(
+//           warrantyEndDate.getMonth() + parseInt(duration, 10)
+//         );
+//         break;
+//       case "YEARS":
+//         warrantyEndDate.setFullYear(
+//           warrantyEndDate.getFullYear() + parseInt(duration, 10)
+//         );
+//         break;
+//       default:
+//         return null;
+//     }
+
+//     return warrantyEndDate;
+//   };
+
+//   const getWarrantyStatus = (warrantyEndDate) => {
+//     if (!warrantyEndDate) return "ACTIVE";
+
+//     const today = new Date();
+//     const endDate = new Date(warrantyEndDate);
+//     const diffDays = Math.ceil((endDate - today) / (1000 * 60 * 60 * 24));
+
+//     if (diffDays < 0) return "EXPIRED";
+//     if (diffDays <= 30) return "EXPIRING_SOON";
+//     return "ACTIVE";
+//   };
+
+//   const normalizedFurtherActionRequired =
+//     furtherActionRequired ?? further_action_required;
+//   const normalizedMaterialsInput = parseArrayField(materials);
+//   const normalizedPartsUsedInput = parseArrayField(partsUsed);
+//   const normalizedBoatPartsInput = parseArrayField(boatParts);
+
+//   const schema = Joi.object({
+//     taskId: Joi.number().integer().required(),
+//     date: Joi.date().required(),
+//     jobNumber: Joi.string().optional().allow(""),
+//     personAttending: Joi.string().required(),
+//     customerName: Joi.string().required(),
+//     mobile: Joi.string().optional().allow(""),
+//     workToBeCarriedOut: Joi.string().optional().allow(""),
+//     workCarriedOut: Joi.string().optional().allow(""),
+//     furtherActionRequired: Joi.string().optional().allow(""),
+//     further_action_required: Joi.string().optional().allow(""),
+//     cdsSignature: Joi.string().optional().allow(""),
+//     installedDate: Joi.date().optional(),
+//     warrantyStartDate: Joi.date().optional(),
+//     materials: Joi.alternatives().try(
+//       Joi.array().items(
+//         Joi.object({
+//           materialName: Joi.string().required(),
+//           unitsUsed: Joi.number().required(),
+//           pricePerUnit: Joi.number().optional(),
+//           totalPrice: Joi.number().optional(),
+//         })
+//       ),
+//       Joi.string()
+//     ).optional(),
+//     partsUsed: Joi.alternatives().try(
+//       Joi.array().items(
+//         Joi.object({
+//           id: Joi.number().integer().optional(),
+//           partId: Joi.number().integer().optional(),
+//           materialName: Joi.string().optional(),
+//           name: Joi.string().optional(),
+//           partName: Joi.string().optional(),
+//           unitsUsed: Joi.number().optional(),
+//           quantity: Joi.number().optional(),
+//           pricePerUnit: Joi.number().optional(),
+//           totalPrice: Joi.number().optional(),
+//         })
+//       ),
+//       Joi.string()
+//     ).optional(),
+//     boatParts: Joi.alternatives().try(
+//       Joi.array().items(
+//         Joi.object({
+//           id: Joi.number().integer().optional(),
+//           partId: Joi.number().integer().optional(),
+//           installedDate: Joi.date().optional(),
+//           warrantyStartDate: Joi.date().optional(),
+//           notes: Joi.string().optional().allow(""),
+//         })
+//       ),
+//       Joi.string()
+//     ).optional(),
+//   });
+
+//   const payloadToValidate = {
+//     ...req.body,
+//     materials: normalizedMaterialsInput,
+//     partsUsed: normalizedPartsUsedInput,
+//     boatParts: normalizedBoatPartsInput,
+//   };
+
+//   const { error } = schema.validate(payloadToValidate);
+//   if (error) {
+//     const message = error.details.map((i) => i.message).join(", ");
+//     return res.status(400).json({
+//       message,
+//       missingParams: error.details[0].message,
+//       status: 400,
+//       success: false,
+//     });
+//   }
+
+//   try {
+//     void normalizedFurtherActionRequired;
+
+//     const task = await prisma.task.findFirst({
+//       where: {
+//         id: parseInt(taskId),
+//         supplierId: req.user.id,
+//       },
+//       include: {
+//         JobServiceSheet: {
+//           include: {
+//             Material: true,
+//           },
+//         },
+//         user: true,
+//       },
+//     });
+
+//     if (!task) {
+//       return createErrorResponse(res, 404, MessageEnum.TASK_NOT_FOUND);
+//     }
+
+//     const existingExtraPartRequests = await getExtraPartRequestsForTask({
+//       taskId: task.id,
+//       requesterType: "SUPPLIER",
+//       requesterId: req.user.id,
+//     });
+
+//     const pendingExtraPartRequests = existingExtraPartRequests.filter(
+//       (request) => request.status !== "FULFILLED"
+//     );
+
+//     if (pendingExtraPartRequests.length > 0) {
+//       return res.status(200).json({
+//         success: false,
+//         message:
+//           "Extra parts request is still pending from user side. Please wait until all requested parts are added before updating the CDS Job Sheet.",
+//         status: 200,
+//         data: {},
+//       });
+//     }
+
+//     const fulfilledExtraPartRequests = existingExtraPartRequests.filter(
+//       (request) => request.status === "FULFILLED"
+//     );
+//     const incompleteFulfilledRequests = fulfilledExtraPartRequests.filter(
+//       (request) => !request.addedPart
+//     );
+
+//     if (incompleteFulfilledRequests.length > 0) {
+//       return res.status(200).json({
+//         success: false,
+//         message:
+//           "Requested part is marked fulfilled but was not added to inventory. Please add it from user side before updating the CDS Job Sheet.",
+//         status: 200,
+//         data: {
+//           extraPartRequests: incompleteFulfilledRequests.map((request) => ({
+//             id: request.id,
+//             partName: request.partName,
+//             status: request.status,
+//           })),
+//         },
+//       });
+//     }
+
+//     const fulfilledPartsUsed = fulfilledExtraPartRequests.map((request) => {
+//       const pricePerUnit =
+//         request.attachedMaterial?.pricePerUnit ??
+//         request.addedPart.boat_owner_cost ??
+//         request.addedPart.original_cost ??
+//         0;
+//       const unitsUsed = Number(request.unitsUsed || 0);
+//       const totalPrice =
+//         request.attachedMaterial?.totalPrice ?? unitsUsed * Number(pricePerUnit || 0);
+
+//       return {
+//         extraPartRequestId: request.id,
+//         partId: request.addedPart.id,
+//         materialName: request.addedPart.name || request.partName,
+//         name: request.addedPart.name || request.partName,
+//         unitsUsed,
+//         pricePerUnit: Number(pricePerUnit || 0),
+//         totalPrice: Number(totalPrice || 0),
+//         source: "REQUEST_FULFILLED",
+//       };
+//     });
+
+//     const selectedPartIds = normalizedPartsUsedInput
+//       .map((part) => parseInt(part.partId ?? part.id, 10))
+//       .filter((partId) => !Number.isNaN(partId));
+
+//     const requiredDatePartIds = [
+//       ...new Set([
+//         ...selectedPartIds,
+//         ...fulfilledPartsUsed.map((part) => part.partId),
+//       ]),
+//     ];
+//     const boatPartDateMap = new Map(
+//       normalizedBoatPartsInput
+//         .map((boatPart) => ({
+//           partId: parseInt(boatPart.partId ?? boatPart.id, 10),
+//           boatPart,
+//         }))
+//         .filter(({ partId }) => !Number.isNaN(partId))
+//         .map(({ partId, boatPart }) => [partId, boatPart])
+//     );
+//     const missingDateParts = requiredDatePartIds.filter((partId) => {
+//       const boatPart = boatPartDateMap.get(partId);
+//       return !(
+//         (boatPart?.installedDate || installedDate) &&
+//         (boatPart?.warrantyStartDate || warrantyStartDate)
+//       );
+//     });
+
+//     if (missingDateParts.length > 0) {
+//       return res.status(400).json({
+//         success: false,
+//         message:
+//           "installedDate and warrantyStartDate are required for every selected or fulfilled requested part.",
+//         status: 400,
+//         data: {
+//           missingPartIds: missingDateParts,
+//         },
+//       });
+//     }
+
+//     const inventoryParts =
+//       selectedPartIds.length > 0
+//         ? await prisma.partInventory.findMany({
+//             where: {
+//               userId: task.userId,
+//               id: {
+//                 in: selectedPartIds,
+//               },
+//             },
+//             select: {
+//               id: true,
+//               name: true,
+//               original_cost: true,
+//               boat_owner_cost: true,
+//             },
+//           })
+//         : [];
+
+//     const inventoryPartMap = new Map(
+//       inventoryParts.map((part) => [part.id, part])
+//     );
+
+//     const materialRows = [];
+
+//     normalizedMaterialsInput.forEach((material) => {
+//       const unitsUsed = parseFloat(material.unitsUsed);
+//       const pricePerUnit =
+//         material.pricePerUnit !== undefined &&
+//         material.pricePerUnit !== null &&
+//         material.pricePerUnit !== ""
+//           ? parseFloat(material.pricePerUnit)
+//           : null;
+//       const totalPrice =
+//         material.totalPrice !== undefined &&
+//         material.totalPrice !== null &&
+//         material.totalPrice !== ""
+//           ? parseFloat(material.totalPrice)
+//           : (pricePerUnit || 0) * unitsUsed;
+
+//       materialRows.push({
+//         materialName: material.materialName,
+//         unitsUsed,
+//         pricePerUnit,
+//         totalPrice,
+//       });
+//     });
+
+//     normalizedPartsUsedInput.forEach((part) => {
+//       const partId = parseInt(part.partId ?? part.id, 10);
+//       const inventoryPart = inventoryPartMap.get(partId);
+//       const materialName =
+//         inventoryPart?.name ||
+//         part.materialName ||
+//         part.name ||
+//         part.partName;
+//       const unitsUsed = parseFloat(part.unitsUsed ?? part.quantity ?? 0);
+
+//       if (!materialName || Number.isNaN(unitsUsed) || unitsUsed <= 0) {
+//         return;
+//       }
+
+//       const pricePerUnit =
+//         part.pricePerUnit !== undefined &&
+//         part.pricePerUnit !== null &&
+//         part.pricePerUnit !== ""
+//           ? parseFloat(part.pricePerUnit)
+//           : inventoryPart?.boat_owner_cost ?? inventoryPart?.original_cost ?? 0;
+//       const totalPrice =
+//         part.totalPrice !== undefined &&
+//         part.totalPrice !== null &&
+//         part.totalPrice !== ""
+//           ? parseFloat(part.totalPrice)
+//           : unitsUsed * pricePerUnit;
+
+//       materialRows.push({
+//         materialName,
+//         unitsUsed,
+//         pricePerUnit,
+//         totalPrice,
+//       });
+//     });
+
+//     fulfilledPartsUsed.forEach((part) => {
+//       if (selectedPartIds.includes(part.partId)) return;
+
+//       materialRows.push({
+//         materialName: part.materialName,
+//         unitsUsed: part.unitsUsed,
+//         pricePerUnit: part.pricePerUnit,
+//         totalPrice: part.totalPrice,
+//       });
+//     });
+
+//     const jobSheetPayload = {
+//       date: new Date(date),
+//       taskId: parseInt(taskId),
+//       boatId: task.boatId,
+//       userId: task.userId,
+//       supplierId: req.user.id,
+//       jobNumber,
+//       personAttending,
+//       customerName,
+//       mobile,
+//       workToBeCarriedOut,
+//       workCarriedOut,
+//       cdsSignature,
+//     };
+
+//     let jobServiceSheet = task.JobServiceSheet[0] || null;
+
+//     if (jobServiceSheet) {
+//       jobServiceSheet = await prisma.jobServiceSheet.update({
+//         where: {
+//           id: jobServiceSheet.id,
+//         },
+//         data: jobSheetPayload,
+//       });
+
+//       await prisma.material.deleteMany({
+//         where: {
+//           jobServiceSheetId: jobServiceSheet.id,
+//         },
+//       });
+//     } else {
+//       jobServiceSheet = await prisma.jobServiceSheet.create({
+//         data: jobSheetPayload,
+//       });
+//     }
+
+//     if (materialRows.length > 0) {
+//       await prisma.material.createMany({
+//         data: materialRows.map((material) => ({
+//           jobServiceSheetId: jobServiceSheet.id,
+//           materialName: material.materialName,
+//           unitsUsed: material.unitsUsed,
+//           pricePerUnit: material.pricePerUnit,
+//           totalPrice: material.totalPrice,
+//         })),
+//       });
+//     }
+
+//     const installedBoatParts = [];
+
+//     for (const boatPart of normalizedBoatPartsInput) {
+//       const partId = parseInt(boatPart.partId ?? boatPart.id, 10);
+
+//       if (Number.isNaN(partId)) {
+//         continue;
+//       }
+
+//       const part = await prisma.partInventory.findFirst({
+//         where: {
+//           id: partId,
+//           userId: task.userId,
+//         },
+//       });
+
+//       if (!part) {
+//         continue;
+//       }
+
+//       const installedDateValue = boatPart.installedDate || installedDate || null;
+//       const warrantyStartDateValue =
+//         boatPart.warrantyStartDate ||
+//         warrantyStartDate ||
+//         installedDateValue ||
+//         null;
+
+//       const warrantyEndDate = calculateWarrantyEndDate(
+//         warrantyStartDateValue,
+//         part.warranty_duration,
+//         part.warranty_type
+//       );
+
+//       const status = getWarrantyStatus(warrantyEndDate);
+
+//       await prisma.$executeRaw`
+//         INSERT INTO BoatPart
+//           (boatId, partId, installedDate, warrantyStartDate, warrantyEndDate, status, notes, createdAt, updatedAt)
+//         VALUES
+//           (
+//             ${task.boatId},
+//             ${partId},
+//             ${installedDateValue ? new Date(installedDateValue) : null},
+//             ${warrantyStartDateValue ? new Date(warrantyStartDateValue) : null},
+//             ${warrantyEndDate},
+//             ${status},
+//             ${boatPart.notes || null},
+//             NOW(),
+//             NOW()
+//           )
+//       `;
+
+//       installedBoatParts.push({
+//         partId,
+//         boatId: task.boatId,
+//         installedDate: installedDateValue,
+//         warrantyStartDate: warrantyStartDateValue,
+//         warrantyEndDate,
+//         status,
+//         notes: boatPart.notes || null,
+//       });
+//     }
+
+//     await prisma.task.update({
+//       where: {
+//         id: parseInt(taskId),
+//       },
+//       data: {
+//         status: 2,
+//       },
+//     });
+
+//     const responseData = {
+//       ...jobServiceSheet,
+//       materials: materialRows,
+//       partsUsed: [
+//         ...normalizedPartsUsedInput,
+//         ...fulfilledPartsUsed.filter((part) => !selectedPartIds.includes(part.partId)),
+//       ],
+//       boatParts: installedBoatParts,
+//     };
+
+//     return createSuccessResponse(
+//       res,
+//       200,
+//       true,
+//       MessageEnum.JOB_SERVICE_SHEET,
+//       responseData
+//     );
+//   } catch (error) {
+//     console.error(error);
+//     return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
+//   }
+// };
+
 export const createJobServiceSheet = async (req, res) => {
   const {
     taskId,
@@ -844,74 +1718,54 @@ export const createJobServiceSheet = async (req, res) => {
     further_action_required,
     cdsSignature,
     materials,
-    partsUsed,
     boatParts,
-    installedDate,
-    warrantyStartDate,
   } = req.body;
 
   const parseArrayField = (value) => {
     if (!value) return [];
     if (Array.isArray(value)) return value;
-
     if (typeof value === "string") {
       try {
-        const parsedValue = JSON.parse(value);
-        return Array.isArray(parsedValue) ? parsedValue : [];
-      } catch (parseError) {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
         return [];
       }
     }
-
     return [];
   };
 
   const calculateWarrantyEndDate = (startDate, duration, type) => {
     if (!startDate || !duration || !type) return null;
-
-    const warrantyEndDate = new Date(startDate);
-
+    const end = new Date(startDate);
     switch (String(type).toUpperCase()) {
       case "DAYS":
-        warrantyEndDate.setDate(
-          warrantyEndDate.getDate() + parseInt(duration, 10)
-        );
+        end.setDate(end.getDate() + parseInt(duration, 10));
         break;
       case "MONTHS":
-        warrantyEndDate.setMonth(
-          warrantyEndDate.getMonth() + parseInt(duration, 10)
-        );
+        end.setMonth(end.getMonth() + parseInt(duration, 10));
         break;
       case "YEARS":
-        warrantyEndDate.setFullYear(
-          warrantyEndDate.getFullYear() + parseInt(duration, 10)
-        );
+        end.setFullYear(end.getFullYear() + parseInt(duration, 10));
         break;
       default:
         return null;
     }
-
-    return warrantyEndDate;
+    return end;
   };
 
   const getWarrantyStatus = (warrantyEndDate) => {
     if (!warrantyEndDate) return "ACTIVE";
-
-    const today = new Date();
-    const endDate = new Date(warrantyEndDate);
-    const diffDays = Math.ceil((endDate - today) / (1000 * 60 * 60 * 24));
-
+    const diffDays = Math.ceil((new Date(warrantyEndDate) - new Date()) / (1000 * 60 * 60 * 24));
     if (diffDays < 0) return "EXPIRED";
     if (diffDays <= 30) return "EXPIRING_SOON";
     return "ACTIVE";
   };
 
-  const normalizedFurtherActionRequired =
-    furtherActionRequired ?? further_action_required;
   const normalizedMaterialsInput = parseArrayField(materials);
-  const normalizedPartsUsedInput = parseArrayField(partsUsed);
   const normalizedBoatPartsInput = parseArrayField(boatParts);
 
+  // ── Validation ──────────────────────────────────────────────────────────────
   const schema = Joi.object({
     taskId: Joi.number().integer().required(),
     date: Joi.date().required(),
@@ -924,81 +1778,48 @@ export const createJobServiceSheet = async (req, res) => {
     furtherActionRequired: Joi.string().optional().allow(""),
     further_action_required: Joi.string().optional().allow(""),
     cdsSignature: Joi.string().optional().allow(""),
-    installedDate: Joi.date().optional(),
-    warrantyStartDate: Joi.date().optional(),
     materials: Joi.alternatives().try(
-      Joi.array().items(
-        Joi.object({
-          materialName: Joi.string().required(),
-          unitsUsed: Joi.number().required(),
-          pricePerUnit: Joi.number().optional(),
-          totalPrice: Joi.number().optional(),
-        })
-      ),
-      Joi.string()
-    ).optional(),
-    partsUsed: Joi.alternatives().try(
-      Joi.array().items(
-        Joi.object({
-          id: Joi.number().integer().optional(),
-          partId: Joi.number().integer().optional(),
-          materialName: Joi.string().optional(),
-          name: Joi.string().optional(),
-          partName: Joi.string().optional(),
-          unitsUsed: Joi.number().optional(),
-          quantity: Joi.number().optional(),
-          pricePerUnit: Joi.number().optional(),
-          totalPrice: Joi.number().optional(),
-        })
-      ),
+      Joi.array().items(Joi.object({
+        materialName: Joi.string().required(),
+        unitsUsed: Joi.number().required(),
+        pricePerUnit: Joi.number().optional(),
+        totalPrice: Joi.number().optional(),
+      })),
       Joi.string()
     ).optional(),
     boatParts: Joi.alternatives().try(
-      Joi.array().items(
-        Joi.object({
-          id: Joi.number().integer().optional(),
-          partId: Joi.number().integer().optional(),
-          installedDate: Joi.date().optional(),
-          warrantyStartDate: Joi.date().optional(),
-          notes: Joi.string().optional().allow(""),
-        })
-      ),
+      Joi.array().items(Joi.object({
+        partId: Joi.number().integer().required(),
+        installedDate: Joi.date().required(),
+        warrantyStartDate: Joi.date().required(),
+        notes: Joi.string().optional().allow(""),
+      })),
       Joi.string()
     ).optional(),
   });
 
-  const payloadToValidate = {
-    ...req.body,
-    materials: normalizedMaterialsInput,
-    partsUsed: normalizedPartsUsedInput,
-    boatParts: normalizedBoatPartsInput,
-  };
-
-  const { error } = schema.validate(payloadToValidate);
+  const { error } = schema.validate(
+    { ...req.body, materials: normalizedMaterialsInput, boatParts: normalizedBoatPartsInput },
+    { allowUnknown: true }
+  );
   if (error) {
-    const message = error.details.map((i) => i.message).join(", ");
     return res.status(400).json({
-      message,
+      success: false,
+      message: error.details[0].message,
       missingParams: error.details[0].message,
       status: 400,
-      success: false,
     });
   }
 
   try {
-    void normalizedFurtherActionRequired;
+    void furtherActionRequired;
+    void further_action_required;
 
+    // ── Fetch task ────────────────────────────────────────────────────────────
     const task = await prisma.task.findFirst({
-      where: {
-        id: parseInt(taskId),
-        supplierId: req.user.id,
-      },
+      where: { id: parseInt(taskId), supplierId: req.user.id },
       include: {
-        JobServiceSheet: {
-          include: {
-            Material: true,
-          },
-        },
+        JobServiceSheet: { include: { Material: true } },
         user: true,
       },
     });
@@ -1007,232 +1828,66 @@ export const createJobServiceSheet = async (req, res) => {
       return createErrorResponse(res, 404, MessageEnum.TASK_NOT_FOUND);
     }
 
-    const existingExtraPartRequests = await getExtraPartRequestsForTask({
-      taskId: task.id,
-      requesterType: "SUPPLIER",
-      requesterId: req.user.id,
-    });
+    // ── Validate boatParts exist in PartInventory ─────────────────────────────
+    if (normalizedBoatPartsInput.length > 0) {
+      const partIds = normalizedBoatPartsInput.map((bp) => parseInt(bp.partId, 10));
 
-    // const pendingExtraPartRequests = existingExtraPartRequests.filter(
-    //   (request) => request.status !== "FULFILLED"
-    // );
+      const foundParts = await prisma.$queryRaw`
+        SELECT id FROM \`PartInventory\`
+        WHERE id IN (${Prisma.join(partIds)}) AND userId = ${task.userId}
+      `;
 
-    // if (pendingExtraPartRequests.length > 0) {
-    //   return res.status(200).json({
-    //     success: false,
-    //     message:
-    //       "Extra parts request is still pending from user side. Please wait until all requested parts are added before updating the CDS Job Sheet.",
-    //     status: 200,
-    //     data: {},
-    //   });
-    // }
+      const foundIds = foundParts.map((p) => Number(p.id));
+      const missingIds = partIds.filter((id) => !foundIds.includes(id));
 
-    const fulfilledExtraPartRequests = existingExtraPartRequests.filter(
-      (request) => request.status === "FULFILLED"
-    );
-    const incompleteFulfilledRequests = fulfilledExtraPartRequests.filter(
-      (request) => !request.addedPart
-    );
-
-    if (incompleteFulfilledRequests.length > 0) {
-      return res.status(200).json({
-        success: false,
-        message:
-          "Requested part is marked fulfilled but was not added to inventory. Please add it from user side before updating the CDS Job Sheet.",
-        status: 200,
-        data: {
-          extraPartRequests: incompleteFulfilledRequests.map((request) => ({
-            id: request.id,
-            partName: request.partName,
-            status: request.status,
-          })),
-        },
-      });
-    }
-
-    const fulfilledPartsUsed = fulfilledExtraPartRequests.map((request) => {
-      const pricePerUnit =
-        request.attachedMaterial?.pricePerUnit ??
-        request.addedPart.boat_owner_cost ??
-        request.addedPart.original_cost ??
-        0;
-      const unitsUsed = Number(request.unitsUsed || 0);
-      const totalPrice =
-        request.attachedMaterial?.totalPrice ?? unitsUsed * Number(pricePerUnit || 0);
-
-      return {
-        extraPartRequestId: request.id,
-        partId: request.addedPart.id,
-        materialName: request.addedPart.name || request.partName,
-        name: request.addedPart.name || request.partName,
-        unitsUsed,
-        pricePerUnit: Number(pricePerUnit || 0),
-        totalPrice: Number(totalPrice || 0),
-        source: "REQUEST_FULFILLED",
-      };
-    });
-
-    const selectedPartIds = normalizedPartsUsedInput
-      .map((part) => parseInt(part.partId ?? part.id, 10))
-      .filter((partId) => !Number.isNaN(partId));
-
-    const requiredDatePartIds = [
-      ...new Set([
-        ...selectedPartIds,
-        ...fulfilledPartsUsed.map((part) => part.partId),
-      ]),
-    ];
-    const boatPartDateMap = new Map(
-      normalizedBoatPartsInput
-        .map((boatPart) => ({
-          partId: parseInt(boatPart.partId ?? boatPart.id, 10),
-          boatPart,
-        }))
-        .filter(({ partId }) => !Number.isNaN(partId))
-        .map(({ partId, boatPart }) => [partId, boatPart])
-    );
-    const missingDateParts = requiredDatePartIds.filter((partId) => {
-      const boatPart = boatPartDateMap.get(partId);
-      return !(
-        (boatPart?.installedDate || installedDate) &&
-        (boatPart?.warrantyStartDate || warrantyStartDate)
-      );
-    });
-
-    if (missingDateParts.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "installedDate and warrantyStartDate are required for every selected or fulfilled requested part.",
-        status: 400,
-        data: {
-          missingPartIds: missingDateParts,
-        },
-      });
-    }
-
-    const inventoryParts =
-      selectedPartIds.length > 0
-        ? await prisma.partInventory.findMany({
-            where: {
-              userId: task.userId,
-              id: {
-                in: selectedPartIds,
-              },
-            },
-            select: {
-              id: true,
-              name: true,
-              original_cost: true,
-              boat_owner_cost: true,
-            },
-          })
-        : [];
-
-    const inventoryPartMap = new Map(
-      inventoryParts.map((part) => [part.id, part])
-    );
-
-    const materialRows = [];
-
-    normalizedMaterialsInput.forEach((material) => {
-      const unitsUsed = parseFloat(material.unitsUsed);
-      const pricePerUnit =
-        material.pricePerUnit !== undefined &&
-        material.pricePerUnit !== null &&
-        material.pricePerUnit !== ""
-          ? parseFloat(material.pricePerUnit)
-          : null;
-      const totalPrice =
-        material.totalPrice !== undefined &&
-        material.totalPrice !== null &&
-        material.totalPrice !== ""
-          ? parseFloat(material.totalPrice)
-          : (pricePerUnit || 0) * unitsUsed;
-
-      materialRows.push({
-        materialName: material.materialName,
-        unitsUsed,
-        pricePerUnit,
-        totalPrice,
-      });
-    });
-
-    normalizedPartsUsedInput.forEach((part) => {
-      const partId = parseInt(part.partId ?? part.id, 10);
-      const inventoryPart = inventoryPartMap.get(partId);
-      const materialName =
-        inventoryPart?.name ||
-        part.materialName ||
-        part.name ||
-        part.partName;
-      const unitsUsed = parseFloat(part.unitsUsed ?? part.quantity ?? 0);
-
-      if (!materialName || Number.isNaN(unitsUsed) || unitsUsed <= 0) {
-        return;
+      if (missingIds.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Parts not found in inventory: ${missingIds.join(", ")}`,
+          status: 400,
+          data: { missingPartIds: missingIds },
+        });
       }
+    }
 
-      const pricePerUnit =
-        part.pricePerUnit !== undefined &&
-        part.pricePerUnit !== null &&
-        part.pricePerUnit !== ""
-          ? parseFloat(part.pricePerUnit)
-          : inventoryPart?.boat_owner_cost ?? inventoryPart?.original_cost ?? 0;
-      const totalPrice =
-        part.totalPrice !== undefined &&
-        part.totalPrice !== null &&
-        part.totalPrice !== ""
-          ? parseFloat(part.totalPrice)
-          : unitsUsed * pricePerUnit;
+    // ── Build material rows ───────────────────────────────────────────────────
+    const materialRows = normalizedMaterialsInput.map((material) => {
+      const unitsUsed = parseFloat(material.unitsUsed);
+      const pricePerUnit = material.pricePerUnit != null && material.pricePerUnit !== ""
+        ? parseFloat(material.pricePerUnit)
+        : null;
+      const totalPrice = material.totalPrice != null && material.totalPrice !== ""
+        ? parseFloat(material.totalPrice)
+        : (pricePerUnit || 0) * unitsUsed;
 
-      materialRows.push({
-        materialName,
-        unitsUsed,
-        pricePerUnit,
-        totalPrice,
-      });
+      return { materialName: material.materialName, unitsUsed, pricePerUnit, totalPrice };
     });
 
-    fulfilledPartsUsed.forEach((part) => {
-      if (selectedPartIds.includes(part.partId)) return;
-
-      materialRows.push({
-        materialName: part.materialName,
-        unitsUsed: part.unitsUsed,
-        pricePerUnit: part.pricePerUnit,
-        totalPrice: part.totalPrice,
-      });
-    });
-
+    // ── Create / update job service sheet ────────────────────────────────────
     const jobSheetPayload = {
       date: new Date(date),
       taskId: parseInt(taskId),
       boatId: task.boatId,
       userId: task.userId,
       supplierId: req.user.id,
-      jobNumber,
-      personAttending,
-      customerName,
-      mobile,
-      workToBeCarriedOut,
-      workCarriedOut,
-      cdsSignature,
+      jobNumber: jobNumber || null,
+      personAttending: personAttending || null,
+      customerName: customerName || null,
+      mobile: mobile || null,
+      workToBeCarriedOut: workToBeCarriedOut || null,
+      workCarriedOut: workCarriedOut || null,
+      cdsSignature: cdsSignature || null,
     };
 
     let jobServiceSheet = task.JobServiceSheet[0] || null;
 
     if (jobServiceSheet) {
       jobServiceSheet = await prisma.jobServiceSheet.update({
-        where: {
-          id: jobServiceSheet.id,
-        },
+        where: { id: jobServiceSheet.id },
         data: jobSheetPayload,
       });
-
       await prisma.material.deleteMany({
-        where: {
-          jobServiceSheetId: jobServiceSheet.id,
-        },
+        where: { jobServiceSheetId: jobServiceSheet.id },
       });
     } else {
       jobServiceSheet = await prisma.jobServiceSheet.create({
@@ -1240,110 +1895,94 @@ export const createJobServiceSheet = async (req, res) => {
       });
     }
 
+    // ── Save materials ────────────────────────────────────────────────────────
     if (materialRows.length > 0) {
       await prisma.material.createMany({
-        data: materialRows.map((material) => ({
+        data: materialRows.map((m) => ({
           jobServiceSheetId: jobServiceSheet.id,
-          materialName: material.materialName,
-          unitsUsed: material.unitsUsed,
-          pricePerUnit: material.pricePerUnit,
-          totalPrice: material.totalPrice,
+          materialName: m.materialName,
+          unitsUsed: m.unitsUsed,
+          pricePerUnit: m.pricePerUnit,
+          totalPrice: m.totalPrice,
         })),
       });
     }
 
+    // ── Save boatParts with warranty ──────────────────────────────────────────
     const installedBoatParts = [];
 
-    for (const boatPart of normalizedBoatPartsInput) {
-      const partId = parseInt(boatPart.partId ?? boatPart.id, 10);
+    for (const bp of normalizedBoatPartsInput) {
+      const partId = parseInt(bp.partId, 10);
 
-      if (Number.isNaN(partId)) {
-        continue;
-      }
+      // ✅ Use $queryRaw to bypass Prisma's type conversion error on warranty_type field
+      const partRows = await prisma.$queryRaw`
+        SELECT id, warranty_duration, warranty_type
+        FROM \`PartInventory\`
+        WHERE id = ${partId} AND userId = ${task.userId}
+        LIMIT 1
+      `;
 
-      const part = await prisma.partInventory.findFirst({
-        where: {
-          id: partId,
-          userId: task.userId,
-        },
-      });
+      const part = partRows[0];
+      if (!part) continue; // already validated above, safety net
 
-      if (!part) {
-        continue;
-      }
+      const installedDateValue = new Date(bp.installedDate);
+      const warrantyStartDateValue = new Date(bp.warrantyStartDate);
 
-      const installedDateValue = boatPart.installedDate || installedDate || null;
-      const warrantyStartDateValue =
-        boatPart.warrantyStartDate ||
-        warrantyStartDate ||
-        installedDateValue ||
-        null;
+      const warrantyType = part.warranty_type ? String(part.warranty_type) : null;
+      const warrantyDuration = part.warranty_duration ? Number(part.warranty_duration) : null;
 
       const warrantyEndDate = calculateWarrantyEndDate(
         warrantyStartDateValue,
-        part.warranty_duration,
-        part.warranty_type
+        warrantyDuration,
+        warrantyType
       );
 
       const status = getWarrantyStatus(warrantyEndDate);
 
-      await prisma.$executeRaw`
-        INSERT INTO BoatPart
-          (boatId, partId, installedDate, warrantyStartDate, warrantyEndDate, status, notes, createdAt, updatedAt)
-        VALUES
-          (
-            ${task.boatId},
-            ${partId},
-            ${installedDateValue ? new Date(installedDateValue) : null},
-            ${warrantyStartDateValue ? new Date(warrantyStartDateValue) : null},
-            ${warrantyEndDate},
-            ${status},
-            ${boatPart.notes || null},
-            NOW(),
-            NOW()
-          )
-      `;
+      const created = await prisma.boatPart.create({
+        data: {
+          boatId: task.boatId,
+          partId,
+          installedDate: installedDateValue,
+          warrantyStartDate: warrantyStartDateValue,
+          warrantyEndDate: warrantyEndDate ?? null,
+          status,
+          notes: bp.notes || null,
+        },
+      });
 
       installedBoatParts.push({
+        id: created.id,
         partId,
         boatId: task.boatId,
         installedDate: installedDateValue,
         warrantyStartDate: warrantyStartDateValue,
-        warrantyEndDate,
+        warrantyEndDate: warrantyEndDate ?? null,
         status,
-        notes: boatPart.notes || null,
+        notes: bp.notes || null,
       });
     }
 
+    // ── Update task status ────────────────────────────────────────────────────
     await prisma.task.update({
-      where: {
-        id: parseInt(taskId),
-      },
-      data: {
-        status: 2,
-      },
+      where: { id: parseInt(taskId) },
+      data: { status: 2 },
     });
 
-    const responseData = {
+    return createSuccessResponse(res, 200, true, MessageEnum.JOB_SERVICE_SHEET, {
       ...jobServiceSheet,
       materials: materialRows,
-      partsUsed: [
-        ...normalizedPartsUsedInput,
-        ...fulfilledPartsUsed.filter((part) => !selectedPartIds.includes(part.partId)),
-      ],
       boatParts: installedBoatParts,
-    };
+    });
 
-    return createSuccessResponse(
-      res,
-      200,
-      true,
-      MessageEnum.JOB_SERVICE_SHEET,
-      responseData
-    );
   } catch (error) {
-    console.error(error);
-    return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
+    console.error("JobServiceSheet Supplier Error:", error?.message, error?.stack);
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Internal server error",
+      status: 500,
+      data: {},
+    });
   }
 };
 
@@ -1639,10 +2278,55 @@ export async function getMyProfile(req, res) {
         id: req.user.id
       },
       include: {
-        SupplierInsuranceFile: true
+        SupplierInsuranceFile: true,
+        SupplierServiceCategory: {
+          include: {
+            category: true,
+          },
+        },
       }
     })
 
+    let roleIds = [];
+    let roleDetails = [];
+
+    if (supplier.role) {
+
+      try {
+
+        roleIds = JSON.parse(supplier.role);
+
+        roleDetails =
+          await prisma.masterCategory.findMany({
+            where: {
+              id: {
+                in: roleIds.map(Number)
+              }
+            },
+            select: {
+              id: true,
+              name: true,
+              isCustom: true,
+              status: true,
+              createdAt: true,
+              updatedAt: true
+            }
+          });
+
+      } catch (error) {
+
+        roleIds = [];
+        roleDetails = [];
+
+      }
+
+    }
+    // supplier.serviceCategoryIds = supplier.SupplierServiceCategory.map((item) => item.categoryId);
+    // supplier.serviceCategories = formatServiceCategories(supplier.SupplierServiceCategory);
+    delete supplier.SupplierServiceCategory;
+    // supplier.roleIds = roleIds;
+
+    supplier.role = roleDetails;
     if (supplier.company_logo) {
       supplier.company_logo = `${baseurl}/profile/${supplier.company_logo}`
     }
@@ -1682,6 +2366,29 @@ export async function completeProfile(req, res) {
       abn,
       role
     } = req.body;
+    const categoryIds = parseCategoryIds(req.body.categoryIds ?? req.body.serviceCategoryIds);
+    let parsedRole = [];
+
+    if (role) {
+
+      try {
+
+        parsedRole =
+          typeof role === "string"
+            ? JSON.parse(role)
+            : role;
+
+      } catch (error) {
+
+        return createErrorResponse(
+          res,
+          400,
+          "Invalid role format"
+        );
+
+      }
+
+    }
     const schema = Joi.object({
       company_name: Joi.string().optional(),
       accounting_software_used: Joi.string().optional().allow(''),
@@ -1692,7 +2399,15 @@ export async function completeProfile(req, res) {
       abn: Joi.string().optional().allow(''),
       first_name: Joi.string().max(255).required(),
       last_name: Joi.string().max(255).required(),
-      role: Joi.string().optional().allow(''),
+      role: Joi.any().optional(),
+      // categoryIds: Joi.alternatives().try(
+      //   Joi.array().items(Joi.number().integer().positive()),
+      //   Joi.string().allow("")
+      // ).optional(),
+      // serviceCategoryIds: Joi.alternatives().try(
+      //   Joi.array().items(Joi.number().integer().positive()),
+      //   Joi.string().allow("")
+      // ).optional(),
     });
 
     const result = schema.validate(req.body);
@@ -1703,6 +2418,34 @@ export async function completeProfile(req, res) {
         error: message,
         success: false
       });
+    }
+
+    if (!(await validateServiceCategoryIds(categoryIds))) {
+      return createErrorResponse(res, 400, "Invalid service category selected");
+    }
+
+    if (parsedRole.length > 0) {
+
+      const roleCount =
+        await prisma.masterCategory.count({
+          where: {
+            id: {
+              in: parsedRole.map(Number)
+            },
+            status: 1
+          }
+        });
+
+      if (roleCount !== parsedRole.length) {
+
+        return createErrorResponse(
+          res,
+          400,
+          "Invalid role selected"
+        );
+
+      }
+
     }
 
     let company_logo = null;
@@ -1729,13 +2472,21 @@ export async function completeProfile(req, res) {
       phone_no: phone_no || req.user.phone_no,
       services_offered: services_offered !== null && services_offered !== undefined ? services_offered : req.user.services_offered,
       abn: abn !== null && abn !== undefined ? abn : req.user.abn,
-      role: role !== null && role !== undefined ? role : req.user.role,
+      // role: role !== null && role !== undefined ? role : req.user.role,
+      role:
+        parsedRole.length > 0
+          ? JSON.stringify(parsedRole)
+          : req.user.role,
       complete_profile_status: 1
     };
 
-    await prisma.supplier.update({
-      where: { id: req.user.id },
-      data: supplierData,
+    await prisma.$transaction(async (tx) => {
+      await tx.supplier.update({
+        where: { id: req.user.id },
+        data: supplierData,
+      });
+
+      await replaceSupplierServiceCategories(tx, req.user.id, categoryIds);
     });
 
     if (req.files && req.files['insurance']) {
@@ -1751,7 +2502,56 @@ export async function completeProfile(req, res) {
 
     const updatedSupplier = await prisma.supplier.findUnique({
       where: { id: req.user.id },
+      include: {
+        SupplierServiceCategory: {
+          include: {
+            category: true,
+          },
+        },
+      },
     });
+
+    let roleIds = [];
+    let roleDetails = [];
+
+    if (updatedSupplier.role) {
+
+      try {
+
+        roleIds =
+          JSON.parse(updatedSupplier.role);
+
+        roleDetails =
+          await prisma.masterCategory.findMany({
+            where: {
+              id: {
+                in: roleIds.map(Number)
+              }
+            },
+            select: {
+              id: true,
+              name: true,
+              isCustom: true,
+              status: true,
+              createdAt: true,
+              updatedAt: true
+            }
+          });
+
+      } catch (error) {
+
+        roleIds = [];
+        roleDetails = [];
+
+      }
+
+    }
+
+    updatedSupplier.serviceCategoryIds = updatedSupplier.SupplierServiceCategory.map((item) => item.categoryId);
+    updatedSupplier.serviceCategories = formatServiceCategories(updatedSupplier.SupplierServiceCategory);
+    delete updatedSupplier.SupplierServiceCategory;
+    updatedSupplier.roleIds = roleIds;
+    updatedSupplier.role = roleDetails;
 
     let mailOptions = {
       from: "noreply@first-mate.net",
@@ -1774,6 +2574,100 @@ export async function completeProfile(req, res) {
   }
 }
 
+// export async function editProfile(req, res) {
+//   try {
+//     const {
+//       company_name,
+//       first_name, last_name,
+//       accounting_software_used,
+//       about_us,
+//       phone_no,
+//       service_region,
+//       services_offered,
+//       abn,
+//       role
+//     } = req.body;
+//     const schema = Joi.object({
+//       company_name: Joi.string().optional(),
+//       accounting_software_used: Joi.string().optional().allow(''),
+//       about_us: Joi.string().optional().allow(''),
+//       service_region: Joi.string().optional().allow(''),
+//       phone_no: Joi.string().optional(),
+//       services_offered: Joi.string().optional().allow(''),
+//       abn: Joi.string().optional().allow(''),
+//       first_name: Joi.string().max(255).required(),
+//       last_name: Joi.string().max(255).required(),
+//       role: Joi.string().optional().allow(''),
+//     });
+
+//     const result = schema.validate(req.body);
+//     if (result.error) {
+//       const message = result.error.details.map(i => i.message).join(",");
+//       return res.status(400).json({
+//         message: result.error.details[0].message,
+//         error: message,
+//         success: false
+//       });
+//     }
+
+//     let company_logo = null;
+//     let trade_license = null;
+//     if (req.files && req.files['logo'] && req.files['logo'][0]) {
+//       company_logo = req.files['logo'][0].filename;
+//     }
+
+
+//     if (req.files && req.files['trade_license'] && req.files['trade_license'][0]) {
+//       trade_license = req.files['trade_license'][0].filename;
+//     }
+
+
+//     const supplierData = {
+//       company_name: company_name || req.user.company_name,
+//       first_name: first_name ? first_name : req.user.first_name,
+//       last_name: last_name ? last_name : req.user.last_name,
+//       company_logo: company_logo || req.user.company_logo,
+//       trade_license: trade_license || req.user.trade_license,
+//       accounting_software_used: accounting_software_used !== null && accounting_software_used !== undefined ? accounting_software_used : req.user.accounting_software_used,
+//       about_us: about_us !== null && about_us !== undefined ? about_us : req.user.about_us,
+//       service_region: service_region !== null && service_region !== undefined ? service_region : req.user.service_region,
+//       phone_no: phone_no || req.user.phone_no,
+//       services_offered: services_offered !== null && services_offered !== undefined ? services_offered : req.user.services_offered,
+//       abn: abn !== null && abn !== undefined ? abn : req.user.abn,
+//       role: role !== null && role !== undefined ? role : req.user.role,
+//     };
+
+//     await prisma.supplier.update({
+//       where: { id: req.user.id },
+//       data: supplierData,
+//     });
+
+//     if (req.files && req.files['insurance']) {
+//       for (const file of req.files['insurance']) {
+//         await prisma.supplierInsuranceFile.create({
+//           data: {
+//             filename: file.filename,
+//             supplierId: req.user.id,
+//           }
+//         });
+//       }
+//     }
+
+//     const updatedSupplier = await prisma.supplier.findUnique({
+//       where: { id: req.user.id },
+//     });
+
+//     return createSuccessResponse(res, 200, true, MessageEnum.PROFILE_UPDATED, updatedSupplier);
+
+//   } catch (error) {
+//     console.error(error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Internal server error.",
+//       error: error.message
+//     });
+//   }
+// }
 export async function editProfile(req, res) {
   try {
     const {
@@ -1787,6 +2681,17 @@ export async function editProfile(req, res) {
       abn,
       role
     } = req.body;
+    // const categoryIds = parseCategoryIds(req.body.categoryIds ?? req.body.serviceCategoryIds);
+    let parsedRole = role;
+
+    if (typeof role === "string") {
+      try {
+        parsedRole = JSON.parse(role);
+      } catch (err) {
+        parsedRole = [];
+      }
+    }
+
     const schema = Joi.object({
       company_name: Joi.string().optional(),
       accounting_software_used: Joi.string().optional().allow(''),
@@ -1797,10 +2702,15 @@ export async function editProfile(req, res) {
       abn: Joi.string().optional().allow(''),
       first_name: Joi.string().max(255).required(),
       last_name: Joi.string().max(255).required(),
-      role: Joi.string().optional().allow(''),
+      role: Joi.array()
+        .items(Joi.number().integer().positive())
+        .optional()
     });
 
-    const result = schema.validate(req.body);
+    const result = schema.validate({
+      ...req.body,
+      role: parsedRole
+    });
     if (result.error) {
       const message = result.error.details.map(i => i.message).join(",");
       return res.status(400).json({
@@ -1809,6 +2719,10 @@ export async function editProfile(req, res) {
         success: false
       });
     }
+
+    // if (!(await validateServiceCategoryIds(categoryIds))) {
+    //   return createErrorResponse(res, 400, "Invalid service category selected");
+    // }
 
     let company_logo = null;
     let trade_license = null;
@@ -1834,12 +2748,14 @@ export async function editProfile(req, res) {
       phone_no: phone_no || req.user.phone_no,
       services_offered: services_offered !== null && services_offered !== undefined ? services_offered : req.user.services_offered,
       abn: abn !== null && abn !== undefined ? abn : req.user.abn,
-      role: role !== null && role !== undefined ? role : req.user.role,
+      role: role ? JSON.stringify(parsedRole) : req.user.role
     };
 
     await prisma.supplier.update({
-      where: { id: req.user.id },
-      data: supplierData,
+      where: {
+        id: req.user.id
+      },
+      data: supplierData
     });
 
     if (req.files && req.files['insurance']) {
@@ -1853,9 +2769,47 @@ export async function editProfile(req, res) {
       }
     }
 
+    // const updatedSupplier = await prisma.supplier.findUnique({
+    //   where: { id: req.user.id },
+    //   include: {
+    //     SupplierServiceCategory: {
+    //       include: {
+    //         category: true,
+    //       },
+    //     },
+    //   },
+    // });
+
     const updatedSupplier = await prisma.supplier.findUnique({
-      where: { id: req.user.id },
+      where: {
+        id: req.user.id
+      }
     });
+
+const roleIds = updatedSupplier.role
+  ? JSON.parse(updatedSupplier.role)
+  : [];
+
+const roles = roleIds.length
+  ? await prisma.masterCategory.findMany({
+      where: {
+        id: {
+          in: roleIds
+        }
+      },
+      select: {
+        id: true,
+        name: true,
+        isCustom: true,
+        status: true
+      }
+    })
+  : [];
+
+updatedSupplier.role = roles;
+    // updatedSupplier.serviceCategoryIds = updatedSupplier.SupplierServiceCategory.map((item) => item.categoryId);
+    // updatedSupplier.serviceCategories = formatServiceCategories(updatedSupplier.SupplierServiceCategory);
+    // delete updatedSupplier.SupplierServiceCategory;
 
     return createSuccessResponse(res, 200, true, MessageEnum.PROFILE_UPDATED, updatedSupplier);
 
@@ -2466,3 +3420,75 @@ export const respondToTaskOffer = async (req, res) => {
 };
 
 
+export async function getSupplierRoles(req, res) {
+  try {
+
+    const roles =
+      await prisma.masterCategory.findMany({
+        where: {
+          status: 1
+        },
+        orderBy: {
+          name: "asc"
+        }
+      });
+
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      "Roles fetched successfully",
+      roles
+    );
+
+  } catch (error) {
+
+    console.log(error);
+
+    return createErrorResponse(
+      res,
+      500,
+      MessageEnum.INTERNAL_SERVER_ERROR
+    );
+
+  }
+}
+
+export async function getSupplierRoleById(req, res) {
+  try {
+
+    const role =
+      await prisma.masterCategory.findUnique({
+        where: {
+          id: Number(req.params.id)
+        }
+      });
+
+    if (!role) {
+      return createErrorResponse(
+        res,
+        404,
+        "Role not found"
+      );
+    }
+
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      "Role fetched successfully",
+      role
+    );
+
+  } catch (error) {
+
+    console.log(error);
+
+    return createErrorResponse(
+      res,
+      500,
+      MessageEnum.INTERNAL_SERVER_ERROR
+    );
+
+  }
+}

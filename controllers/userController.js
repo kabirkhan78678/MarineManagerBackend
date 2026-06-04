@@ -704,55 +704,227 @@ export const changePasswordapi = async (req, res) => {
   }
 }
 
+// export async function editProfile(req, res) {
+//   try {
+//     const {
+//       company_name,
+//       first_name, last_name,
+//       accounting_software_used,
+//       about_us,
+//       phone_no,
+//       service_region,
+//       services_offered,
+//       location,
+//       BSB, ACC,
+//       abn,
+//       categoryIds
+//     } = req.body;
+//     let parsedCategoryIds = [];
+
+//     if (req.body.categoryIds) {
+//       try {
+//         parsedCategoryIds =
+//           typeof req.body.categoryIds === "string"
+//             ? JSON.parse(req.body.categoryIds)
+//             : req.body.categoryIds;
+//       } catch (error) {
+//         return res.status(400).json({
+//           success: false,
+//           message: "Invalid categoryIds format"
+//         });
+//       }
+//     }
+//     const schema = Joi.object({
+//       company_name: Joi.string().optional(),
+//       accounting_software_used: Joi.string().optional().allow(''),
+//       about_us: Joi.string().optional().allow(''),
+//       service_region: Joi.string().optional().allow(''),
+//       phone_no: Joi.string().optional(),
+//       services_offered: Joi.string().optional().allow(''),
+//       abn: Joi.string().optional().allow(''),
+//       first_name: Joi.string().max(255).required(),
+//       last_name: Joi.string().max(255).required(),
+//       BSB: Joi.string().max(255).required(),
+//       ACC: Joi.string().max(255).required(),
+//       location: Joi.string().optional().allow(''),
+//       categoryIds: Joi.any().optional()
+//     });
+//     const result = schema.validate({
+//       ...req.body,
+//       categoryIds: parsedCategoryIds
+//     });
+//     if (result.error) {
+//       const message = result.error.details.map(i => i.message).join(",");
+//       return res.status(400).json({
+//         message: result.error.details[0].message,
+//         error: message,
+//         success: false
+//       });
+//     }
+
+//     let profile_image = null;
+//     let company_logo = null;
+//     let trade_license = null;
+//     if (req.files && req.files['profile_image'] && req.files['profile_image'][0]) {
+//       profile_image = req.files['profile_image'][0].filename;
+//     }
+
+//     if (req.files && req.files['logo'] && req.files['logo'][0]) {
+//       company_logo = req.files['logo'][0].filename;
+//     }
+
+
+//     if (req.files && req.files['trade_license'] && req.files['trade_license'][0]) {
+//       trade_license = req.files['trade_license'][0].filename;
+//     }
+
+
+//     const userData = {
+//       company_name: company_name || req.user.company_name,
+//       first_name: first_name ? first_name : req.user.first_name,
+//       last_name: last_name ? last_name : req.user.last_name,
+//       ACC: ACC ? ACC : req.user.ACC,
+//       BSB: BSB ? BSB : req.user.BSB,
+//       profile_image: profile_image || req.user.profile_image,
+//       company_logo: company_logo || req.user.company_logo,
+//       trade_license: trade_license || req.user.trade_license,
+//       accounting_software_used: accounting_software_used !== null && accounting_software_used !== undefined ? accounting_software_used : req.user.accounting_software_used,
+//       about_us: about_us !== null && about_us !== undefined ? about_us : req.user.about_us,
+//       service_region: service_region !== null && service_region !== undefined ? service_region : req.user.service_region,
+//       phone_no: phone_no || req.user.phone_no,
+//       services_offered: services_offered !== null && services_offered !== undefined ? services_offered : req.user.services_offered,
+//       abn: abn !== null && abn !== undefined ? abn : req.user.abn,
+//       location: location !== null && location !== undefined ? location : req.user.location
+//     };
+
+//     await prisma.user.update({
+//       where: { id: req.user.id },
+//       data: userData,
+//     });
+
+//     if (Array.isArray(parsedCategoryIds)) {
+
+//       await prisma.userServiceCategory.deleteMany({
+//         where: {
+//           userId: req.user.id
+//         }
+//       });
+
+//       if (parsedCategoryIds.length > 0) {
+
+//         await prisma.userServiceCategory.createMany({
+//           data: parsedCategoryIds.map(categoryId => ({
+//             userId: req.user.id,
+//             categoryId: Number(categoryId)
+//           }))
+//         });
+
+//       }
+//     }
+
+//     if (req.files && req.files['insurance']) {
+//       for (const file of req.files['insurance']) {
+//         await prisma.insuranceFile.create({
+//           data: {
+//             filename: file.filename,
+//             userId: req.user.id,
+//           }
+//         });
+//       }
+//     }
+
+//  const updatedUser = await prisma.user.findUnique({
+//   where: {
+//     id: req.user.id
+//   },
+//   include: {
+//     UserServiceCategory: {
+//       include: {
+//         category: {
+//           select: {
+//             id: true,
+//             name: true
+//           }
+//         }
+//       }
+//     }
+//   }
+// });
+//     if (updatedUser?.profile_image) {
+//       updatedUser.profile_image = `${baseurl}/profile/${updatedUser.profile_image}`;
+//     }
+//     if (updatedUser?.company_logo) {
+//       updatedUser.company_logo = `${baseurl}/profile/${updatedUser.company_logo}`;
+//     }
+//     if (updatedUser?.trade_license) {
+//       updatedUser.trade_license = `${baseurl}/profile/${updatedUser.trade_license}`;
+//     }
+
+//     return createSuccessResponse(res, 200, true, MessageEnum.PROFILE_UPDATED, updatedUser);
+
+//   } catch (error) {
+//     console.error(error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Internal server error.",
+//       error: error.message
+//     });
+//   }
+// }
+
 export async function editProfile(req, res) {
   try {
     const {
       company_name,
-      first_name, last_name,
+      first_name,
+      last_name,
       accounting_software_used,
       about_us,
       phone_no,
       service_region,
       services_offered,
       location,
-      BSB, ACC,
-      abn,
-      categoryIds
+      BSB,
+      ACC,
+      abn
     } = req.body;
-    let parsedCategoryIds = [];
 
-    if (req.body.categoryIds) {
+    let parsedServicesOffered = [];
+
+    if (req.body.services_offered) {
       try {
-        parsedCategoryIds =
-          typeof req.body.categoryIds === "string"
-            ? JSON.parse(req.body.categoryIds)
-            : req.body.categoryIds;
+        parsedServicesOffered =
+          typeof req.body.services_offered === "string"
+            ? JSON.parse(req.body.services_offered)
+            : req.body.services_offered;
       } catch (error) {
         return res.status(400).json({
           success: false,
-          message: "Invalid categoryIds format"
+          message: "Invalid services_offered format"
         });
       }
     }
+
     const schema = Joi.object({
       company_name: Joi.string().optional(),
       accounting_software_used: Joi.string().optional().allow(''),
       about_us: Joi.string().optional().allow(''),
       service_region: Joi.string().optional().allow(''),
       phone_no: Joi.string().optional(),
-      services_offered: Joi.string().optional().allow(''),
+      services_offered: Joi.any().optional(),
       abn: Joi.string().optional().allow(''),
       first_name: Joi.string().max(255).required(),
       last_name: Joi.string().max(255).required(),
       BSB: Joi.string().max(255).required(),
       ACC: Joi.string().max(255).required(),
-      location: Joi.string().optional().allow(''),
-      categoryIds: Joi.any().optional()
+      location: Joi.string().optional().allow('')
     });
+
     const result = schema.validate({
       ...req.body,
-      categoryIds: parsedCategoryIds
+      services_offered: parsedServicesOffered
     });
+
     if (result.error) {
       const message = result.error.details.map(i => i.message).join(",");
       return res.status(400).json({
@@ -765,105 +937,115 @@ export async function editProfile(req, res) {
     let profile_image = null;
     let company_logo = null;
     let trade_license = null;
-    if (req.files && req.files['profile_image'] && req.files['profile_image'][0]) {
-      profile_image = req.files['profile_image'][0].filename;
+
+    if (req.files?.profile_image?.[0]) {
+      profile_image = req.files.profile_image[0].filename;
     }
 
-    if (req.files && req.files['logo'] && req.files['logo'][0]) {
-      company_logo = req.files['logo'][0].filename;
+    if (req.files?.logo?.[0]) {
+      company_logo = req.files.logo[0].filename;
     }
 
-
-    if (req.files && req.files['trade_license'] && req.files['trade_license'][0]) {
-      trade_license = req.files['trade_license'][0].filename;
+    if (req.files?.trade_license?.[0]) {
+      trade_license = req.files.trade_license[0].filename;
     }
-
 
     const userData = {
       company_name: company_name || req.user.company_name,
-      first_name: first_name ? first_name : req.user.first_name,
-      last_name: last_name ? last_name : req.user.last_name,
-      ACC: ACC ? ACC : req.user.ACC,
-      BSB: BSB ? BSB : req.user.BSB,
+      first_name: first_name || req.user.first_name,
+      last_name: last_name || req.user.last_name,
+      ACC: ACC || req.user.ACC,
+      BSB: BSB || req.user.BSB,
+
       profile_image: profile_image || req.user.profile_image,
       company_logo: company_logo || req.user.company_logo,
       trade_license: trade_license || req.user.trade_license,
-      accounting_software_used: accounting_software_used !== null && accounting_software_used !== undefined ? accounting_software_used : req.user.accounting_software_used,
-      about_us: about_us !== null && about_us !== undefined ? about_us : req.user.about_us,
-      service_region: service_region !== null && service_region !== undefined ? service_region : req.user.service_region,
+
+      accounting_software_used:
+        accounting_software_used !== null &&
+        accounting_software_used !== undefined
+          ? accounting_software_used
+          : req.user.accounting_software_used,
+
+      about_us:
+        about_us !== null &&
+        about_us !== undefined
+          ? about_us
+          : req.user.about_us,
+
+      service_region:
+        service_region !== null &&
+        service_region !== undefined
+          ? service_region
+          : req.user.service_region,
+
       phone_no: phone_no || req.user.phone_no,
-      services_offered: services_offered !== null && services_offered !== undefined ? services_offered : req.user.services_offered,
-      abn: abn !== null && abn !== undefined ? abn : req.user.abn,
-      location: location !== null && location !== undefined ? location : req.user.location
+
+      services_offered:
+        parsedServicesOffered.length > 0
+          ? JSON.stringify(parsedServicesOffered)
+          : req.user.services_offered,
+
+      abn:
+        abn !== null &&
+        abn !== undefined
+          ? abn
+          : req.user.abn,
+
+      location:
+        location !== null &&
+        location !== undefined
+          ? location
+          : req.user.location
     };
 
     await prisma.user.update({
-      where: { id: req.user.id },
-      data: userData,
+      where: {
+        id: req.user.id
+      },
+      data: userData
     });
 
-    if (Array.isArray(parsedCategoryIds)) {
-
-      await prisma.userServiceCategory.deleteMany({
-        where: {
-          userId: req.user.id
-        }
-      });
-
-      if (parsedCategoryIds.length > 0) {
-
-        await prisma.userServiceCategory.createMany({
-          data: parsedCategoryIds.map(categoryId => ({
-            userId: req.user.id,
-            categoryId: Number(categoryId)
-          }))
-        });
-
-      }
-    }
-
-    if (req.files && req.files['insurance']) {
-      for (const file of req.files['insurance']) {
+    if (req.files?.insurance) {
+      for (const file of req.files.insurance) {
         await prisma.insuranceFile.create({
           data: {
             filename: file.filename,
-            userId: req.user.id,
+            userId: req.user.id
           }
         });
       }
     }
 
- const updatedUser = await prisma.user.findUnique({
-  where: {
-    id: req.user.id
-  },
-  include: {
-    UserServiceCategory: {
-      include: {
-        category: {
-          select: {
-            id: true,
-            name: true
-          }
-        }
+    const updatedUser = await prisma.user.findUnique({
+      where: {
+        id: req.user.id
       }
-    }
-  }
-});
+    });
+
     if (updatedUser?.profile_image) {
       updatedUser.profile_image = `${baseurl}/profile/${updatedUser.profile_image}`;
     }
+
     if (updatedUser?.company_logo) {
       updatedUser.company_logo = `${baseurl}/profile/${updatedUser.company_logo}`;
     }
+
     if (updatedUser?.trade_license) {
       updatedUser.trade_license = `${baseurl}/profile/${updatedUser.trade_license}`;
     }
 
-    return createSuccessResponse(res, 200, true, MessageEnum.PROFILE_UPDATED, updatedUser);
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      MessageEnum.PROFILE_UPDATED,
+      updatedUser
+    );
 
   } catch (error) {
     console.error(error);
+
     return res.status(500).json({
       success: false,
       message: "Internal server error.",
@@ -873,6 +1055,62 @@ export async function editProfile(req, res) {
 }
 
 
+// export async function myProfile(req, res) {
+//   try {
+//     const user = await prisma.user.findUnique({
+//       where: {
+//         id: req.user.id
+//       },
+//       include: {
+//         InsuranceFile: true,
+
+//         UserServiceCategory: {
+//           include: {
+//             category: {
+//               select: {
+//                 id: true,
+//                 name: true
+//               }
+//             }
+//           }
+//         }
+//       }
+//     })
+//     user.categories = user.UserServiceCategory.map(
+//   item => item.category
+// );
+
+// delete user.UserServiceCategory;
+//     if (user.company_logo) {
+//       user.company_logo = `${baseurl}/profile/${user.company_logo}`
+//     }
+//     if (user.profile_image) {
+//       user.profile_image = `${baseurl}/profile/${user.profile_image}`
+//     }
+//     if (user.trade_license) {
+//       user.trade_license = `${baseurl}/profile/${user.trade_license}`
+//     }
+//     user.location = user.location || "";
+
+//     if (user.InsuranceFile.length > 0) {
+
+//       await Promise.all(user.InsuranceFile.map((file) => {
+//         file.filename = `${baseurl}/profile/${file.filename}`
+//       }))
+
+//     }
+
+//     createSuccessResponse(res, 200, true, MessageEnum.PROFILE_DATA, user);
+
+
+//   } catch (error) {
+//     console.log(error);
+//     return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
+
+
+//   }
+// }
+
 export async function myProfile(req, res) {
   try {
     const user = await prisma.user.findUnique({
@@ -880,52 +1118,92 @@ export async function myProfile(req, res) {
         id: req.user.id
       },
       include: {
-        InsuranceFile: true,
+        InsuranceFile: true
+      }
+    });
 
-        UserServiceCategory: {
-          include: {
-            category: {
+    if (!user) {
+      return createErrorResponse(
+        res,
+        404,
+        "User not found"
+      );
+    }
+
+    // Get category details from services_offered
+    let serviceCategories = [];
+
+    if (user.services_offered) {
+      try {
+        const categoryIds = JSON.parse(user.services_offered);
+
+        if (
+          Array.isArray(categoryIds) &&
+          categoryIds.length > 0
+        ) {
+          serviceCategories =
+            await prisma.serviceCategory.findMany({
+              where: {
+                id: {
+                  in: categoryIds.map(Number)
+                }
+              },
               select: {
                 id: true,
                 name: true
               }
-            }
-          }
+            });
         }
+      } catch (error) {
+        console.log(
+          "services_offered parse error",
+          error
+        );
       }
-    })
-    user.categories = user.UserServiceCategory.map(
-  item => item.category
-);
+    }
 
-delete user.UserServiceCategory;
+    // Replace ids with full category details
+    user.services_offered = serviceCategories;
+
     if (user.company_logo) {
-      user.company_logo = `${baseurl}/profile/${user.company_logo}`
+      user.company_logo = `${baseurl}/profile/${user.company_logo}`;
     }
+
     if (user.profile_image) {
-      user.profile_image = `${baseurl}/profile/${user.profile_image}`
+      user.profile_image = `${baseurl}/profile/${user.profile_image}`;
     }
+
     if (user.trade_license) {
-      user.trade_license = `${baseurl}/profile/${user.trade_license}`
+      user.trade_license = `${baseurl}/profile/${user.trade_license}`;
     }
+
     user.location = user.location || "";
 
-    if (user.InsuranceFile.length > 0) {
-
-      await Promise.all(user.InsuranceFile.map((file) => {
-        file.filename = `${baseurl}/profile/${file.filename}`
-      }))
-
+    if (user.InsuranceFile?.length > 0) {
+      user.InsuranceFile = user.InsuranceFile.map(
+        (file) => ({
+          ...file,
+          filename: `${baseurl}/profile/${file.filename}`
+        })
+      );
     }
 
-    createSuccessResponse(res, 200, true, MessageEnum.PROFILE_DATA, user);
-
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      MessageEnum.PROFILE_DATA,
+      user
+    );
 
   } catch (error) {
     console.log(error);
-    return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
 
-
+    return createErrorResponse(
+      res,
+      500,
+      MessageEnum.INTERNAL_SERVER_ERROR
+    );
   }
 }
 

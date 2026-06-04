@@ -77,11 +77,28 @@ export async function addStaffMember(req, res) {
     console.log(req.body);
     console.log("after");
 
+    let parsedRole = [];
+
+if (role) {
+  try {
+    parsedRole =
+      typeof role === "string"
+        ? JSON.parse(role)
+        : role;
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid role format"
+    });
+  }
+}
+
     const schema = Joi.object({
       email: Joi.string().min(5).max(255).email({ tlds: { allow: false } }).lowercase().required(),
       password: Joi.string().min(8).required(),
       name: Joi.string().max(255).required(),
-      role: Joi.string().max(255).required(),
+      // role: Joi.string().max(255).required(),
+      role: Joi.any().required(),
       phone_no: Joi.string().max(255).required(),
       home_address: Joi.string().required(),
       hourly_rate: Joi.number().required(),
@@ -107,6 +124,7 @@ export async function addStaffMember(req, res) {
     if (staffMember) {
       return createErrorResponse(res, 403, MessageEnum.ALREADY_STAFF_MEMBER);
     }
+
     const hashedPassword = await argon2.hash(password); // Using argon2 to hash the password
     console.log(hashedPassword);
 
@@ -144,7 +162,8 @@ export async function addStaffMember(req, res) {
         password: hashedPassword,
         showPassword: password,
         full_name: name,
-        role: role,
+        // role: role,
+        role: JSON.stringify(parsedRole),
         phone_no,
         userId: req.user.id,
         hourly_rate: parseFloat(hourly_rate),
@@ -170,21 +189,52 @@ export async function addStaffMember(req, res) {
     } catch (mailError) {
       console.log("staff welcome email error", mailError);
     }
+let roleDetails = [];
+
+if (parsedRole.length > 0) {
+
+ roleDetails =
+  await prisma.masterCategory.findMany({
+    where: {
+      id: {
+        in: parsedRole.map(Number)
+      },
+      status: 1
+    },
+    select: {
+      id: true,
+      name: true,
+      isCustom: true
+    }
+  });
+
+}
 
     const technician = {
-      id: createdStaffMember.id,
-      full_name: createdStaffMember.full_name,
-      role: createdStaffMember.role,
-      email: createdStaffMember.email,
-      phone_no: createdStaffMember.phone_no,
-      status: createdStaffMember.status,
-      hourly_rate: createdStaffMember.hourly_rate,
-      home_address: createdStaffMember.home_address,
-      total_tasks: 0,
-      completed_tasks: 0,
-      completion_rate: 0,
-    };
+  id: createdStaffMember.id,
 
+  full_name: createdStaffMember.full_name,
+
+  // roleIds: parsedRole,
+
+  role: roleDetails,
+
+  email: createdStaffMember.email,
+
+  phone_no: createdStaffMember.phone_no,
+
+  status: createdStaffMember.status,
+
+  hourly_rate: createdStaffMember.hourly_rate,
+
+  home_address: createdStaffMember.home_address,
+
+  total_tasks: 0,
+
+  completed_tasks: 0,
+
+  completion_rate: 0,
+};
     return createSuccessResponse(res, 200, true, MessageEnum.STAFF_MEMBER_ADDED, technician);
 
   } catch (error) {
@@ -202,10 +252,26 @@ export async function editStaffMember(req, res) {
     console.log(req.body);
     console.log("after");
 
+    let parsedRole = [];
+
+if (role) {
+  try {
+    parsedRole =
+      typeof role === "string"
+        ? JSON.parse(role)
+        : role;
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid role format"
+    });
+  }
+} 
+
     const schema = Joi.object({
       password: Joi.string().min(8).optional(),
       name: Joi.string().max(255).optional(),
-      role: Joi.string().max(255).optional(),
+      role: Joi.any().optional(),
       phone_no: Joi.string().max(255).optional(),
       home_address: Joi.string().optional(),
       status: Joi.number().integer().optional(),
@@ -234,6 +300,7 @@ export async function editStaffMember(req, res) {
     if (!staffMember) {
       return createErrorResponse(res, 403, MessageEnum.STAFF_MEMBER_NOT_FOUND);
     }
+
     let hashedPassword = staffMember.password;
     let showPassword = staffMember.showPassword;
     if (password) {
@@ -279,13 +346,51 @@ export async function editStaffMember(req, res) {
         password: hashedPassword,
         showPassword: showPassword,
         full_name: name ? name : staffMember.full_name,
-        role: role ? role : staffMember.role,
+       role:parsedRole.length > 0? JSON.stringify(parsedRole): staffMember.role,
         phone_no: phone_no ? phone_no : staffMember.phone_no,
         home_address: home_address ? home_address : staffMember.home_address,
         status: status != null && status != undefined ? parseInt(status) : staffMember.status,
         hourly_rate: hourly_rate ? parseFloat(hourly_rate) : staffMember.hourly_rate
       },
     });
+
+let roleDetails = [];
+let roleIds = [];
+
+if (updatedStaffMember.role) {
+
+  try {
+
+    roleIds = JSON.parse(
+      updatedStaffMember.role
+    );
+
+    roleDetails =
+      await prisma.masterCategory.findMany({
+        where: {
+          id: {
+            in: roleIds.map(Number)
+          },
+          status: 1
+        },
+        select: {
+          id: true,
+          name: true,
+          isCustom: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true
+        }
+      });
+
+  } catch (error) {
+
+    roleIds = [];
+    roleDetails = [];
+
+  }
+
+}
 
     const taskSummary = await prisma.task.groupBy({
       by: ['status'],
@@ -301,20 +406,51 @@ export async function editStaffMember(req, res) {
     const completedTasks = taskSummary.find((item) => item.status === 1)?._count._all || 0;
     const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
-    return createSuccessResponse(res, 200, true, MessageEnum.STAFF_MEMBER_EDITED, {
-      id: updatedStaffMember.id,
-      full_name: updatedStaffMember.full_name,
-      role: updatedStaffMember.role,
-      email: updatedStaffMember.email,
-      phone_no: updatedStaffMember.phone_no,
-      home_address: updatedStaffMember.home_address,
-      hourly_rate: updatedStaffMember.hourly_rate,
-      status: updatedStaffMember.status,
-      total_tasks: totalTasks,
-      completed_tasks: completedTasks,
-      completion_rate: completionRate,
-    });
+    // return createSuccessResponse(res, 200, true, MessageEnum.STAFF_MEMBER_EDITED, {
+    //   id: updatedStaffMember.id,
+    //   full_name: updatedStaffMember.full_name,
+    //   role: updatedStaffMember.role,
+    //   email: updatedStaffMember.email,
+    //   phone_no: updatedStaffMember.phone_no,
+    //   home_address: updatedStaffMember.home_address,
+    //   hourly_rate: updatedStaffMember.hourly_rate,
+    //   status: updatedStaffMember.status,
+    //   total_tasks: totalTasks,
+    //   completed_tasks: completedTasks,
+    //   completion_rate: completionRate,
+    // });
 
+    return createSuccessResponse(
+  res,
+  200,
+  true,
+  MessageEnum.STAFF_MEMBER_EDITED,
+  {
+    id: updatedStaffMember.id,
+
+    full_name: updatedStaffMember.full_name,
+
+    roleIds: roleIds,
+
+    role: roleDetails,
+
+    email: updatedStaffMember.email,
+
+    phone_no: updatedStaffMember.phone_no,
+
+    home_address: updatedStaffMember.home_address,
+
+    hourly_rate: updatedStaffMember.hourly_rate,
+
+    status: updatedStaffMember.status,
+
+    total_tasks: totalTasks,
+
+    completed_tasks: completedTasks,
+
+    completion_rate: completionRate,
+  }
+);
   } catch (error) {
     console.log(error);
     return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
@@ -408,6 +544,37 @@ export async function getStaffMemberById(req, res) {
         MessageEnum.STAFF_MEMBER_NOT_FOUND
       );
     }
+
+    let roleIds = [];
+let roleDetails = [];
+
+if (staff?.role) {
+
+  try {
+
+    roleIds = JSON.parse(staff.role);
+
+    roleDetails =
+      await prisma.masterCategory.findMany({
+        where: {
+          id: {
+            in: roleIds.map(Number)
+          }
+        },
+        select: {
+          id: true,
+          name: true,
+          isCustom: true
+        }
+      });
+
+  } catch (error) {
+
+    roleIds = [];
+    roleDetails = [];
+
+  }
+}
 
     // =====================================
     // BASIC SUMMARY
@@ -765,7 +932,7 @@ export async function getStaffMemberById(req, res) {
         staff.full_name,
 
       role:
-        staff.role,
+  roleDetails,
 
       profile_image:
         null,
@@ -1260,8 +1427,8 @@ export async function getAllStaffMembers(req, res) {
     // FINAL RESPONSE
     // =====================================
 
-    const formattedData =
-      staffMembers.map((staff, index) => {
+    const formattedData = await Promise.all(
+     staffMembers.map(async (staff, index) => {
 
         // ================================
         // TASK COUNTS
@@ -1450,7 +1617,36 @@ export async function getAllStaffMembers(req, res) {
         // ================================
         // RETURN OBJECT
         // ================================
+let roleDetails = [];
 
+if (staff.role) {
+
+  try {
+
+    const roleIds = JSON.parse(staff.role);
+
+    roleDetails =
+      await prisma.masterCategory.findMany({
+        where: {
+          id: {
+            in: roleIds.map(Number)
+          }
+        },
+        select: {
+          id: true,
+          name: true,
+          isCustom: true,
+          status: true
+        }
+      });
+
+  } catch (error) {
+
+    roleDetails = [];
+
+  }
+
+}
         return {
 
           sr_no:
@@ -1462,8 +1658,8 @@ export async function getAllStaffMembers(req, res) {
           full_name:
             staff.full_name,
 
-          role:
-            staff.role,
+         role:
+  roleDetails,
 
           email:
             staff.email,
@@ -1570,7 +1766,7 @@ export async function getAllStaffMembers(req, res) {
           }
         };
 
-      });
+      }));
 
     return createSuccessResponse(
 
@@ -2717,7 +2913,7 @@ export const completeTask = async (req, res) => {
   }
 }; */}
 
-export const createJobServiceSheet = async (req, res) => {
+{/* export const createJobServiceSheet = async (req, res) => {
   const {
     taskId,
     date,
@@ -3253,6 +3449,390 @@ fulfilledPartsUsed.forEach((part) => {
       data: {}
     });
   }
+}; */}
+
+export const createJobServiceSheet = async (req, res) => {
+  const {
+    taskId,
+    date,
+    jobNumber,
+    personAttending,
+    customerName,
+    mobile,
+    workToBeCarriedOut,
+    workCarriedOut,
+    cdsSignature,
+    materials,
+    boatParts,
+    installedDate,
+    warrantyStartDate,
+  } = req.body;
+
+  const parseArrayField = (value) => {
+    if (!value) return [];
+    if (Array.isArray(value)) return value;
+    if (typeof value === "string") {
+      try {
+        const parsedValue = JSON.parse(value);
+        return Array.isArray(parsedValue) ? parsedValue : [];
+      } catch (parseError) {
+        return [];
+      }
+    }
+    return [];
+  };
+
+  const calculateWarrantyEndDate = (startDate, duration, type) => {
+    if (!startDate || !duration || !type) return null;
+    const warrantyEndDate = new Date(startDate);
+    switch (String(type).toUpperCase()) {
+      case "DAYS":
+        warrantyEndDate.setDate(warrantyEndDate.getDate() + parseInt(duration, 10));
+        break;
+      case "MONTHS":
+        warrantyEndDate.setMonth(warrantyEndDate.getMonth() + parseInt(duration, 10));
+        break;
+      case "YEARS":
+        warrantyEndDate.setFullYear(warrantyEndDate.getFullYear() + parseInt(duration, 10));
+        break;
+      default:
+        return null;
+    }
+    return warrantyEndDate;
+  };
+
+  const getWarrantyStatus = (warrantyEndDate) => {
+    if (!warrantyEndDate) return "ACTIVE";
+    const today = new Date();
+    const endDate = new Date(warrantyEndDate);
+    const diffDays = Math.ceil((endDate - today) / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) return "EXPIRED";
+    if (diffDays <= 30) return "EXPIRING_SOON";
+    return "ACTIVE";
+  };
+
+  const normalizedMaterialsInput = parseArrayField(materials);
+  const normalizedBoatPartsInput = parseArrayField(boatParts);
+
+  const schema = Joi.object({
+    taskId:             Joi.number().integer().required(),
+    date:               Joi.date().required(),
+    jobNumber:          Joi.string().optional().allow(""),
+    personAttending:    Joi.string().required(),
+    customerName:       Joi.string().required(),
+    mobile:             Joi.string().optional().allow(""),
+    workToBeCarriedOut: Joi.string().optional().allow(""),
+    workCarriedOut:     Joi.string().optional().allow(""),
+    cdsSignature:       Joi.string().optional().allow(""),
+    installedDate:      Joi.date().optional(),
+    warrantyStartDate:  Joi.date().optional(),
+    materials: Joi.alternatives().try(
+      Joi.array().items(Joi.object({
+        materialName: Joi.string().required(),
+        unitsUsed:    Joi.number().required(),
+        pricePerUnit: Joi.number().optional(),
+        totalPrice:   Joi.number().optional(),
+      })),
+      Joi.string()
+    ).optional(),
+    boatParts: Joi.alternatives().try(
+      Joi.array().items(Joi.object({
+        id:                Joi.number().integer().optional(),
+        partId:            Joi.number().integer().optional(),
+        installedDate:     Joi.date().optional(),
+        warrantyStartDate: Joi.date().optional(),
+        notes:             Joi.string().optional().allow(""),
+      })),
+      Joi.string()
+    ).optional(),
+  });
+
+  const payloadToValidate = {
+    ...req.body,
+    materials: normalizedMaterialsInput,
+    boatParts: normalizedBoatPartsInput,
+  };
+
+  const { error } = schema.validate(payloadToValidate, { allowUnknown: true });
+  if (error) {
+    return res.status(400).json({
+      message: error.details[0].message,
+      missingParams: error.details[0].message,
+      status: 400,
+      success: false,
+    });
+  }
+
+  try {
+    // ✅ Staff task fetch
+    const task = await prisma.task.findFirst({
+      where: {
+        id: parseInt(taskId),
+        assignStaffId: req.user.id,
+      },
+      include: {
+        JobServiceSheet: {
+          include: { Material: true },
+        },
+        user: true,
+      },
+    });
+
+    if (!task) {
+      return createErrorResponse(res, 404, MessageEnum.TASK_NOT_FOUND);
+    }
+
+    // ✅ Fetch all extra part requests — no blocking on pending ones
+    const existingExtraPartRequests = await getExtraPartRequestsForTask({
+      taskId: task.id,
+      requesterType: "STAFF",
+      requesterId: req.user.id,
+    });
+
+    // ✅ Only work with requests that are FULFILLED and have an addedPart
+    const fulfilledExtraPartRequests = existingExtraPartRequests.filter(
+      (request) => request.status === "FULFILLED" && request.addedPart
+    );
+
+    const fulfilledPartsUsed = fulfilledExtraPartRequests.map((request) => {
+      const pricePerUnit =
+        request.attachedMaterial?.pricePerUnit ??
+        request.addedPart.boat_owner_cost ??
+        request.addedPart.original_cost ??
+        0;
+      const unitsUsed = Number(request.unitsUsed || 0);
+      const totalPrice =
+        request.attachedMaterial?.totalPrice ??
+        unitsUsed * Number(pricePerUnit || 0);
+
+      return {
+        extraPartRequestId: request.id,
+        partId:       request.addedPart.id,
+        materialName: request.addedPart.name || request.partName,
+        name:         request.addedPart.name || request.partName,
+        unitsUsed,
+        pricePerUnit: Number(pricePerUnit || 0),
+        totalPrice:   Number(totalPrice || 0),
+        source:       "REQUEST_FULFILLED",
+      };
+    });
+
+    // ✅ Only require dates for fulfilled parts (ignore pending)
+    const requiredDatePartIds = [
+      ...new Set(
+        normalizedBoatPartsInput
+          .map((boatPart) => parseInt(boatPart.partId ?? boatPart.id, 10))
+          .filter((id) => !Number.isNaN(id))
+      ),
+    ];
+
+    const boatPartDateMap = new Map(
+      normalizedBoatPartsInput
+        .map((boatPart) => ({
+          partId: parseInt(boatPart.partId ?? boatPart.id, 10),
+          boatPart,
+        }))
+        .filter(({ partId }) => !Number.isNaN(partId))
+        .map(({ partId, boatPart }) => [partId, boatPart])
+    );
+
+    const getPartDateValues = (partId) => {
+      const boatPart = boatPartDateMap.get(partId);
+      return {
+        installedDate:     boatPart?.installedDate || installedDate || null,
+        warrantyStartDate: boatPart?.warrantyStartDate || warrantyStartDate || null,
+      };
+    };
+
+    const getPartLabel = (partId) => {
+      const fulfilledPart = fulfilledPartsUsed.find((part) => part.partId === partId);
+      return fulfilledPart?.name || fulfilledPart?.materialName || `Part ${partId}`;
+    };
+
+    const missingDateParts = requiredDatePartIds
+      .map((partId) => ({
+        partId,
+        partName: getPartLabel(partId),
+        ...getPartDateValues(partId),
+      }))
+      .filter((part) => !part.installedDate || !part.warrantyStartDate);
+
+    if (missingDateParts.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: missingDateParts
+          .map(
+            (part) =>
+              `Please add installedDate and warrantyStartDate for ${part.partName} (partId: ${part.partId}).`
+          )
+          .join(" "),
+        status: 400,
+        data: {
+          missingParts: missingDateParts.map((part) => ({
+            partId: part.partId,
+            partName: part.partName,
+            missingFields: [
+              !part.installedDate ? "installedDate" : null,
+              !part.warrantyStartDate ? "warrantyStartDate" : null,
+            ].filter(Boolean),
+          })),
+        },
+      });
+    }
+
+    // ✅ Build material rows
+    const materialRows = [];
+
+    normalizedMaterialsInput.forEach((material) => {
+      const unitsUsed = parseFloat(material.unitsUsed);
+      const pricePerUnit =
+        material.pricePerUnit !== undefined &&
+        material.pricePerUnit !== null &&
+        material.pricePerUnit !== ""
+          ? parseFloat(material.pricePerUnit)
+          : null;
+      const totalPrice =
+        material.totalPrice !== undefined &&
+        material.totalPrice !== null &&
+        material.totalPrice !== ""
+          ? parseFloat(material.totalPrice)
+          : (pricePerUnit || 0) * unitsUsed;
+
+      materialRows.push({
+        materialName: material.materialName,
+        unitsUsed,
+        pricePerUnit,
+        totalPrice,
+      });
+    });
+
+    // ✅ Add only fully fulfilled parts to material rows
+    fulfilledPartsUsed.forEach((part) => {
+      materialRows.push({
+        materialName: part.materialName,
+        unitsUsed:    part.unitsUsed,
+        pricePerUnit: part.pricePerUnit,
+        totalPrice:   part.totalPrice,
+      });
+    });
+
+    // ✅ Job sheet create/update
+    const jobSheetPayload = {
+      date:               new Date(date),
+      taskId:             parseInt(taskId),
+      boatId:             task.boatId,
+      userId:             task.userId,
+      staffId:            req.user.id,
+      jobNumber,
+      personAttending,
+      customerName,
+      mobile,
+      workToBeCarriedOut,
+      workCarriedOut,
+      cdsSignature,
+    };
+
+    let jobServiceSheet = task.JobServiceSheet[0] || null;
+
+    if (jobServiceSheet) {
+      jobServiceSheet = await prisma.jobServiceSheet.update({
+        where: { id: jobServiceSheet.id },
+        data: jobSheetPayload,
+      });
+      await prisma.material.deleteMany({
+        where: { jobServiceSheetId: jobServiceSheet.id },
+      });
+    } else {
+      jobServiceSheet = await prisma.jobServiceSheet.create({
+        data: jobSheetPayload,
+      });
+    }
+
+    // ✅ Save materials
+    if (materialRows.length > 0) {
+      await prisma.material.createMany({
+        data: materialRows.map((material) => ({
+          jobServiceSheetId: jobServiceSheet.id,
+          materialName:      material.materialName,
+          unitsUsed:         material.unitsUsed,
+          pricePerUnit:      material.pricePerUnit,
+          totalPrice:        material.totalPrice,
+        })),
+      });
+    }
+
+    // ✅ BoatPart warranty save
+    const installedBoatParts = [];
+
+    for (const boatPart of normalizedBoatPartsInput) {
+      const partId = parseInt(boatPart.partId ?? boatPart.id, 10);
+      if (Number.isNaN(partId)) continue;
+
+      const partRows = await mysqlQuery(
+        "SELECT * FROM `PartInventory` WHERE id = ? LIMIT 1",
+        [partId]
+      );
+
+      if (!partRows[0]) continue;
+
+      const installedDateValue      = boatPart.installedDate || installedDate || null;
+      const warrantyStartDateValue  =
+        boatPart.warrantyStartDate || warrantyStartDate || installedDateValue || null;
+
+      const warrantyEndDate = calculateWarrantyEndDate(
+        warrantyStartDateValue,
+        partRows[0].warranty_duration,
+        partRows[0].warranty_type
+      );
+
+      const status = getWarrantyStatus(warrantyEndDate);
+
+      await mysqlQuery(
+        `INSERT INTO \`BoatPart\`
+          (boatId, partId, installedDate, warrantyStartDate, warrantyEndDate, status, notes, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          task.boatId,
+          partId,
+          installedDateValue     ? new Date(installedDateValue)    : null,
+          warrantyStartDateValue ? new Date(warrantyStartDateValue) : null,
+          warrantyEndDate,
+          status,
+          boatPart.notes || null,
+        ]
+      );
+
+      installedBoatParts.push({
+        partId,
+        boatId:            task.boatId,
+        installedDate:     installedDateValue,
+        warrantyStartDate: warrantyStartDateValue,
+        warrantyEndDate,
+        status,
+        notes: boatPart.notes || null,
+      });
+    }
+
+    // ✅ Update task status
+    await prisma.task.update({
+      where: { id: parseInt(taskId) },
+      data:  { status: 2 },
+    });
+
+    return createSuccessResponse(res, 200, true, MessageEnum.JOB_SERVICE_SHEET, {
+      ...jobServiceSheet,
+      materials: materialRows,
+      boatParts: installedBoatParts,
+    });
+  } catch (error) {
+    console.error("JobServiceSheet Error:", error?.message, error?.stack);
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Internal server error",
+      status: 500,
+      data: {},
+    });
+  }
 };
 
 export async function getCompletedTasks(req, res) {
@@ -3314,6 +3894,62 @@ export async function getAllMytasks(req, res) {
   }
 };
 
+
+{/* export async function getMyProfile(req, res) {
+  try {
+
+    const staff = await prisma.staff_Member.findUnique({
+      where: {
+        id: req.user.id
+      },
+      include: {
+        StaffServiceCategory: {
+          include: {
+            category: true
+          }
+        }
+      }
+    });
+
+    if (!staff) {
+      return createErrorResponse(
+        res,
+        404,
+        MessageEnum.STAFF_MEMBER_NOT_FOUND
+      );
+    }
+
+    const response = {
+      ...staff,
+
+      role: staff.StaffServiceCategory.map((item) => ({
+        id: item.category.id,
+        name: item.category.name,
+        isCustom: item.category.isCustom,
+        status: item.category.status
+      }))
+    };
+
+    delete response.StaffServiceCategory;
+
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      MessageEnum.STAFF_MEMBER_DATA,
+      response
+    );
+
+  } catch (error) {
+    console.log(error);
+    return createErrorResponse(
+      res,
+      500,
+      MessageEnum.INTERNAL_SERVER_ERROR
+    );
+  }
+} */}
+
 export async function getMyProfile(req, res) {
   try {
 
@@ -3321,12 +3957,78 @@ export async function getMyProfile(req, res) {
       where: {
         id: req.user.id
       }
-    })
-    return createSuccessResponse(res, 200, true, MessageEnum.STAFF_MEMBER_DATA, staff);
+    });
+
+    if (!staff) {
+      return createErrorResponse(
+        res,
+        404,
+        MessageEnum.STAFF_MEMBER_NOT_FOUND
+      );
+    }
+
+    let roleIds = [];
+    let roleDetails = [];
+
+    if (staff.role) {
+
+      try {
+
+        roleIds = JSON.parse(staff.role);
+
+        roleDetails =
+          await prisma.masterCategory.findMany({
+            where: {
+              id: {
+                in: roleIds.map(Number)
+              },
+              status: 1
+            },
+            select: {
+              id: true,
+              name: true,
+              isCustom: true,
+              status: true,
+              createdAt: true,
+              updatedAt: true
+            }
+          });
+
+      } catch (error) {
+
+        roleIds = [];
+        roleDetails = [];
+
+      }
+
+    }
+
+    const response = {
+      ...staff,
+
+      roleIds,
+
+      role: roleDetails
+    };
+
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      MessageEnum.STAFF_MEMBER_DATA,
+      response
+    );
 
   } catch (error) {
+
     console.log(error);
-    return createErrorResponse(res, 500, MessageEnum.INTERNAL_SERVER_ERROR);
+
+    return createErrorResponse(
+      res,
+      500,
+      MessageEnum.INTERNAL_SERVER_ERROR
+    );
+
   }
 }
 
@@ -3765,3 +4467,75 @@ export async function getAllParts(req, res) {
   }
 }
 
+export async function getStaffRoleById(req, res) {
+  try {
+
+    const role =
+      await prisma.masterCategory.findUnique({
+        where: {
+          id: Number(req.params.id)
+        }
+      });
+
+    if (!role) {
+      return createErrorResponse(
+        res,
+        404,
+        "Role not found"
+      );
+    }
+
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      "Role fetched successfully",
+      role
+    );
+
+  } catch (error) {
+
+    console.log(error);
+
+    return createErrorResponse(
+      res,
+      500,
+      MessageEnum.INTERNAL_SERVER_ERROR
+    );
+
+  }
+}
+
+export async function getStaffRoles(req, res) {
+  try {
+
+    const roles =
+      await prisma.masterCategory.findMany({
+        where: {
+          status: 1
+        },
+        orderBy: {
+          name: "asc"
+        }
+      });
+
+    return createSuccessResponse(
+      res,
+      200,
+      true,
+      "Roles fetched successfully",
+      roles
+    );
+
+  } catch (error) {
+
+    console.log(error);
+
+    return createErrorResponse(
+      res,
+      500,
+      MessageEnum.INTERNAL_SERVER_ERROR
+    );
+
+  }
+}
