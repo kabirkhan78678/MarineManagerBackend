@@ -80,18 +80,18 @@ export const createBoat = async (req, res) => {
   try {
     const newBoat = await prisma.boat.create({
       data: {
-        name: (name && (name !== "null")) ? name  : '',
-        owners_name: (owners_name && (owners_name !== "null")) ? owners_name  : '',
+        name: (name && (name !== "null")) ? name : '',
+        owners_name: (owners_name && (owners_name !== "null")) ? owners_name : '',
         avatar_url: req?.file ? req?.file.filename : null,
         userId: req?.user.id,
-        rego: (rego && (rego !== "null")) ? rego  : '',
-        vin: (vin && (vin !== "null")) ? vin  : '',
-        make: (make && (make !== "null")) ? make  : '',
-        model: (model && (model !== "null")) ? model  : '',
-        engine_no: (engine_no && (engine_no !== "null")) ? engine_no  : '',
-        engine_make: (engine_make && (engine_make !== "null")) ? engine_make  : '',
+        rego: (rego && (rego !== "null")) ? rego : '',
+        vin: (vin && (vin !== "null")) ? vin : '',
+        make: (make && (make !== "null")) ? make : '',
+        model: (model && (model !== "null")) ? model : '',
+        engine_no: (engine_no && (engine_no !== "null")) ? engine_no : '',
+        engine_make: (engine_make && (engine_make !== "null")) ? engine_make : '',
         engine_model: (engine_model && (engine_model !== "null")) ? engine_model : null,
-        length: (length && (length !== "null")) ? length  : '',
+        length: (length && (length !== "null")) ? length : '',
         app_date: app_date ? new Date(app_date) : null,
         book_from: book_from ? new Date(book_from) : null,
         book_to: book_to ? new Date(book_to) : null,
@@ -125,10 +125,10 @@ export const createBoat = async (req, res) => {
   }
 };
 
-
 export const getAllBoat = async (req, res) => {
   try {
-    const { filter, name, date, boat_weight_category, boat_length_category } = req.query; // Extract query parameters
+    const { filter, name, date, boat_weight_category, boat_length_category } = req.query;
+
     const querySchema = Joi.object({
       boat_weight_category: Joi.string().valid(...WEIGHT_CATEGORIES).optional().messages({
         "any.only": WEIGHT_CATEGORY_ERROR_MESSAGE,
@@ -137,54 +137,15 @@ export const getAllBoat = async (req, res) => {
         "any.only": LENGTH_CATEGORY_ERROR_MESSAGE,
       }),
     });
-    const { error } = querySchema.validate({
-      boat_weight_category,
-      boat_length_category,
-    });
 
+    const { error } = querySchema.validate({ boat_weight_category, boat_length_category });
     if (error) {
       return createErrorResponse(res, 400, error.details[0].message);
     }
 
-    const currentDate = new Date();
-
-    const timeZone = 'Asia/Kolkata'; // e.g., 'America/New_York', 'Asia/Kolkata'
-
+    const timeZone = 'Asia/Kolkata';
     const { startOfToday, endOfToday, startOfTomorrow } = getDateRanges(timeZone);
 
-    // Logging the results
-    console.log("startOfToday:", startOfToday.format()); // Outputs in ISO format
-    console.log("endOfToday:", endOfToday.format());     // Outputs in ISO format
-    console.log("startOfTomorrow:", startOfTomorrow.format()); // Outputs in ISO format
-
-    // Start of tofay in UTC
-    // const startOfToday = new Date(
-    //   currentDate.getFullYear(),
-    //   currentDate.getMonth(),
-    //   currentDate.getDate(),
-    //   0, 0, 0 // Midnight
-    // );
-
-    // // End of today in local time (23:59:59.999)
-    // const endOfToday = new Date(
-    //   currentDate.getFullYear(),
-    //   currentDate.getMonth(),
-    //   currentDate.getDate(),
-    //   23, 59, 59, 999 // End of the day
-    // );
-
-    // // Start of tomorrow in local time (00:00:00)
-    // const startOfTomorrow = new Date(
-    //   currentDate.getFullYear(),
-    //   currentDate.getMonth(),
-    //   currentDate.getDate() + 1,
-    //   0, 0, 0 // Midnight of the next day
-    // );
-
-    // // Logging the results in local time (for clarity)
-    // console.log("startOfToday", startOfToday.toLocaleDateString());
-    // console.log("endOfToday", endOfToday);
-    // console.log("startOfTomorrow", startOfTomorrow);
     const filterQuery = {
       userId: req.user.id,
       ...(name && { name: { contains: name } }),
@@ -196,12 +157,10 @@ export const getAllBoat = async (req, res) => {
       }),
       ...(filter === "later" && {
         book_to: {
-          gte: startOfTomorrow.format(), // Boats scheduled for future dates
+          gte: startOfTomorrow.format(),
         },
       }),
-      ...(date && {
-        book_to: new Date(date)
-      }),
+      ...(date && { book_to: new Date(date) }),
       ...(boat_weight_category ? { boat_weight_category } : {}),
       ...(boat_length_category
         ? { boat_length_category: toPrismaLengthCategory(boat_length_category) }
@@ -212,24 +171,89 @@ export const getAllBoat = async (req, res) => {
       where: filterQuery,
       include: {
         DockBooking: {
-          select: {
-            id: true,
+          select: { id: true },
+        },
+        BoatPart: {
+          include: {
+            part: {
+              select: {
+                id: true,
+                name: true,
+                warranty_duration: true,
+                // warranty_type: true,
+                manufacturer: true,
+                part_number: true,
+              },
+            },
+          },
+          orderBy: {
+            installedDate: 'desc',
           },
         },
       },
       orderBy: {
         book_to: 'asc'
       }
-    }
-    );
+    });
+
+    const currentDate = new Date();
 
     boats.map((item) => {
-      item.avatar_url = item.avatar_url ? baseurl + "/boat/" + item.avatar_url : null
+      item.avatar_url = item.avatar_url ? baseurl + "/boat/" + item.avatar_url : null;
       item.boat_length_category = toApiLengthCategory(item.boat_length_category);
       item.status = item.DockBooking.length ? 1 : 0;
       delete item.DockBooking;
-      return item
-    })
+
+      // ✅ WARRANTY CALCULATION — har BoatPart ke liye warranty status calculate karo
+      item.BoatPart = item.BoatPart.map((boatPart) => {
+        const warrantyEndDate = boatPart.warrantyEndDate;
+        let warrantyStatus = "NO_WARRANTY";
+        let warrantyRemainingDays = null;
+
+        if (warrantyEndDate) {
+          const endDate = new Date(warrantyEndDate);
+          const diffMs = endDate - currentDate;
+          const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
+          warrantyRemainingDays = diffDays;
+
+          if (diffDays < 0) {
+            warrantyStatus = "EXPIRED";           // ❌ Expired
+          } else if (diffDays <= 30) {
+            warrantyStatus = "EXPIRING_SOON";     // ⚠️ 30 din ya kam bacha
+          } else {
+            warrantyStatus = "ACTIVE";            // ✅ Active
+          }
+        }
+
+        return {
+          id: boatPart.id,
+          partId: boatPart.partId,
+          partName: boatPart.part?.name ?? null,
+          manufacturer: boatPart.part?.manufacturer ?? null,
+          partNumber: boatPart.part?.part_number ?? null,
+          warrantyDuration: boatPart.part?.warranty_duration ?? null,
+          // warrantyType: String(boatPart.part?.warranty_type ?? ""),  // only if added back
+          installedDate: boatPart.installedDate,
+          warrantyStartDate: boatPart.warrantyStartDate,
+          warrantyEndDate: boatPart.warrantyEndDate,
+          warrantyRemainingDays,
+          warrantyStatus,
+          notes: boatPart.notes,
+          status: boatPart.status,
+        };
+      });
+
+      // ✅ Boat-level warranty summary
+      item.warrantySummary = {
+        totalParts: item.BoatPart.length,
+        activeParts: item.BoatPart.filter(p => p.warrantyStatus === "ACTIVE").length,
+        expiringSoonParts: item.BoatPart.filter(p => p.warrantyStatus === "EXPIRING_SOON").length,
+        expiredParts: item.BoatPart.filter(p => p.warrantyStatus === "EXPIRED").length,
+      };
+
+      return item;
+    });
 
     return createSuccessResponse(res, 200, true, MessageEnum.BOAT_FETCHED, boats);
   } catch (error) {
@@ -325,7 +349,7 @@ export const updateBoat = async (req, res) => {
     boat_length_category: Joi.string().valid(...LENGTH_CATEGORIES).optional().allow(null, '').messages({
       "any.only": LENGTH_CATEGORY_ERROR_MESSAGE,
     }),
-  }); 
+  });
 
   const { error } = schema.validate(req.body);
   if (error) {
